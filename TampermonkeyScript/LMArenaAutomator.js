@@ -76,7 +76,7 @@
             if (typeof payload !== 'string') return payload;
 
             if (payload.includes('"EvaluationStoreProvider"')) {
-                const modifiedPayload = payload.replace(searchPattern, replacement);
+                const modifiedPayload = payload.replace(searchPattern, () => replacement);
                 if (modifiedPayload !== payload) {
                     console.log('LMArena History Forger: Successfully injected conversation history.');
                     return modifiedPayload;
