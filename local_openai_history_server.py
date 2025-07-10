@@ -113,6 +113,9 @@ def update_models_json_file(new_models: list):
             print(f"✅ [Model Updater] 成功创建 'models.json' 并添加了 {len(models_to_write)} 个模型。")
 
 
+# --- 全局配置 ---
+CONFIG = {}
+
 # --- 全局会话缓存 ---
 LAST_CONVERSATION_STATE = None
 
@@ -533,6 +536,29 @@ def _openai_response_generator(task_id: str):
             if RESULTS.get(task_id, {}).get('status') in ['completed', 'failed']:
                 return # 结束生成器
 
+def _load_config():
+    """加载 config.jsonc 文件并移除注释"""
+    global CONFIG
+    try:
+        with open('config.jsonc', 'r', encoding='utf-8') as f:
+            jsonc_content = f.read()
+            # 移除注释
+            json_content = re.sub(r'//.*', '', jsonc_content)
+            json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
+            CONFIG = json.loads(json_content)
+            print("✅ [Config] 配置文件 'config.jsonc' 加载成功。")
+            # 在这里检查互斥条件
+            if CONFIG.get("tavern_mode_enabled") and CONFIG.get("bypass_enabled"):
+                print("⚠️ [Config Warning] 'tavern_mode_enabled' 和 'bypass_enabled' 不能同时为 true。")
+                print("   > 'bypass_enabled' 将被忽略。")
+                CONFIG["bypass_enabled"] = False
+    except FileNotFoundError:
+        print("❌ [Config] 错误: 'config.jsonc' 文件未找到。将使用默认设置。")
+        CONFIG = {"bypass_enabled": False, "tavern_mode_enabled": False}
+    except json.JSONDecodeError:
+        print("❌ [Config] 错误: 'config.jsonc' 文件格式不正确。将使用默认设置。")
+        CONFIG = {"bypass_enabled": False, "tavern_mode_enabled": False}
+
 def _update_conversation_state(request_base, new_messages: list):
     """
     通用状态更新函数。
@@ -584,9 +610,23 @@ def list_models():
 def chat_completions():
     """
     兼容 OpenAI 的 chat completions 端点（带会话缓存）。
+    v2: 增加酒馆模式支持。
     """
     global LAST_CONVERSATION_STATE
     request_data = request.json
+
+    # --- 新增日志 (可配置) ---
+    if CONFIG.get("log_server_requests"):
+        print("\n--- 接收到 OpenAI 格式的请求体 ---")
+        try:
+            # 使用 json.dumps 美化输出，ensure_ascii=False 以正确显示中文
+            print(json.dumps(request_data, indent=2, ensure_ascii=False))
+        except Exception as e:
+            # 如果数据无法序列化为JSON，则直接打印
+            print(f"无法打印请求体: {e}\n原始数据: {request_data}")
+        print("------------------------------------\n")
+    # --- 日志结束 ---
+
     if not request_data or "messages" not in request_data:
         return jsonify({"error": "请求体需要包含 'messages' 字段。"}), 400
 
@@ -605,69 +645,99 @@ def chat_completions():
     use_stream = request_data.get("stream", False)
     request_id = f"chatcmpl-{uuid.uuid4()}"
 
-    # --- 对话连续性检测 ---
-    is_continuation = False
-    if LAST_CONVERSATION_STATE:
-        cached_messages = LAST_CONVERSATION_STATE.get("messages", [])
-        new_messages_base = messages[:-1]
-        if json.dumps(cached_messages, sort_keys=True) == json.dumps(new_messages_base, sort_keys=True):
-            is_continuation = True
-
-    last_message = messages[-1]
-    prompt_content = last_message.get("content", "")
-    request_base_for_update = request_data.copy()
-    request_base_for_update["messages"] = messages[:-1]
-
-    # --- 路径选择：快速通道 vs 完整注入 ---
-    if is_continuation:
-        print(f"⚡️ [Fast Path] 检测到连续对话 (请求 {request_id[:8]})，跳过历史注入。")
-    else:
-        print(f"🔄 [Full Injection] 检测到新对话或状态不一致 (请求 {request_id[:8]})，执行完整历史注入。")
-        LAST_CONVERSATION_STATE = None # 重置状态
+    # --- 【新】酒馆模式处理逻辑 ---
+    if CONFIG.get("tavern_mode_enabled"):
+        print("🍻 [Tavern Mode] 已启用酒馆模式。")
         
-        # 准备要注入的历史记录 (除最后一条消息外的所有内容)
-        history_messages = messages[:-1]
+        # 1. 合并 System Prompts
+        system_prompts = [msg['content'] for msg in messages if msg['role'] == 'system']
+        other_messages = [msg for msg in messages if msg['role'] != 'system']
         
-        # 【【【核心重构：使用事件信号机制替代 time.sleep】】】
+        merged_system_prompt = "\n\n".join(system_prompts)
+        
+        final_messages_for_injection = []
+        if merged_system_prompt:
+            final_messages_for_injection.append({"role": "system", "content": merged_system_prompt})
+        final_messages_for_injection.extend(other_messages)
+
+        print(f"  > 合并了 {len(system_prompts)} 条 system 提示。")
+
+        # 2. 准备完整历史注入
+        print(f"  > 准备对 {len(final_messages_for_injection)} 条消息进行完整历史注入。")
+        history_data = {"model": model, "messages": final_messages_for_injection}
+        
         injection_id = str(uuid.uuid4())
-        
-        # 1. 先创建并存储事件
         event = threading.Event()
         INJECTION_EVENTS[injection_id] = event
-        print(f"  > 已为注入任务 {injection_id} 创建等待信号。")
-
-        # 2. 准备任务并放入队列
-        history_messages = messages[:-1]
         
-        # 【【【核心修复：处理空历史和系统提示词】】】
-        # 如果历史记录为空，我们需要决定注入什么。
-        if not history_messages:
-            # 查找原始请求中是否有 system prompt
-            system_prompt = next((msg for msg in messages if msg['role'] == 'system'), None)
-            if system_prompt:
-                print("  > 检测到空历史记录，但有系统提示词。将注入系统提示词。")
-                history_messages.append(system_prompt)
-            else:
-                print("  > 检测到空历史记录，且无系统提示词。注入一个带空格的系统提示词以初始化。")
-                history_messages.append({"role": "system", "content": " "})
-
-        history_data = {"model": model, "messages": history_messages}
         lmarena_history_job = convert_openai_to_lmarena(history_data)
         lmarena_history_job["injection_id"] = injection_id
         INJECTION_JOBS.put(lmarena_history_job)
-        print(f"  > 已提交注入任务 {injection_id}。等待油猴脚本的完成信号...")
-
-        # 3. 现在可以安全地等待事件了
+        
+        print(f"  > 已提交注入任务 {injection_id}。等待油猴脚本完成信号...")
         completed_in_time = event.wait(timeout=60.0)
         if completed_in_time:
-            print(f"  > 注入任务 {injection_id} 已确认完成。继续执行。")
+            print(f"  > 注入任务 {injection_id} 已确认完成。")
         else:
-            print(f"  > 警告：等待注入任务 {injection_id} 完成超时（60秒）。可能出现问题。")
-            # 超时后也清理掉事件，避免内存泄漏
+            print(f"  > 警告：等待注入任务 {injection_id} 超时（60秒）。")
             if injection_id in INJECTION_EVENTS:
                 del INJECTION_EVENTS[injection_id]
+        
+        # 3. 准备触发请求
+        prompt_content = "[TAVERN_MODE_TRIGGER]" # 使用特殊占位符触发
+        # 在酒馆模式下，我们不缓存状态，因为每次都是全新的注入
+        last_message = {"role": "user", "content": "[TAVERN_MODE_TRIGGER]"} # 伪造一个 last_message 用于记录
+        request_base_for_update = request_data.copy()
+        # 更新状态时，要用合并和清理过的消息列表
+        request_base_for_update["messages"] = final_messages_for_injection
 
-    # --- 任务提交与响应生成 ---
+    else:
+        # --- 原始路径：标准对话模式 ---
+        is_continuation = False
+        if LAST_CONVERSATION_STATE:
+            cached_messages = LAST_CONVERSATION_STATE.get("messages", [])
+            new_messages_base = messages[:-1]
+            if json.dumps(cached_messages, sort_keys=True) == json.dumps(new_messages_base, sort_keys=True):
+                is_continuation = True
+
+        last_message = messages[-1]
+        prompt_content = last_message.get("content", "")
+        request_base_for_update = request_data.copy()
+        request_base_for_update["messages"] = messages[:-1]
+
+        if is_continuation:
+            print(f"⚡️ [Fast Path] 检测到连续对话 (请求 {request_id[:8]})，跳过历史注入。")
+        else:
+            print(f"🔄 [Full Injection] 检测到新对话或状态不一致 (请求 {request_id[:8]})，执行完整历史注入。")
+            LAST_CONVERSATION_STATE = None # 重置状态
+            history_messages = messages[:-1]
+            
+            injection_id = str(uuid.uuid4())
+            event = threading.Event()
+            INJECTION_EVENTS[injection_id] = event
+            
+            if not history_messages:
+                system_prompt = next((msg for msg in messages if msg['role'] == 'system'), None)
+                if system_prompt:
+                    history_messages.append(system_prompt)
+                else:
+                    history_messages.append({"role": "system", "content": " "})
+
+            history_data = {"model": model, "messages": history_messages}
+            lmarena_history_job = convert_openai_to_lmarena(history_data)
+            lmarena_history_job["injection_id"] = injection_id
+            INJECTION_JOBS.put(lmarena_history_job)
+            
+            print(f"  > 已提交注入任务 {injection_id}。等待油猴脚本完成信号...")
+            completed_in_time = event.wait(timeout=60.0)
+            if completed_in_time:
+                print(f"  > 注入任务 {injection_id} 已确认完成。")
+            else:
+                print(f"  > 警告：等待注入任务 {injection_id} 超时（60秒）。")
+                if injection_id in INJECTION_EVENTS:
+                    del INJECTION_EVENTS[injection_id]
+
+    # --- 任务提交与响应生成 (通用部分) ---
     task_id = str(uuid.uuid4())
     prompt_job = {"task_id": task_id, "prompt": prompt_content}
     PROMPT_JOBS.put(prompt_job)
@@ -687,7 +757,10 @@ def chat_completions():
             # 流结束后，组合完整响应并更新会话状态
             final_text = "".join(full_ai_response_text)
             assistant_message = {"role": "assistant", "content": final_text}
-            _update_conversation_state(request_base_for_update, [last_message, assistant_message])
+            
+            # 在酒馆模式下，不更新状态
+            if not CONFIG.get("tavern_mode_enabled"):
+                _update_conversation_state(request_base_for_update, [last_message, assistant_message])
             
             # 发送结束信号
             yield format_openai_finish_chunk(model, request_id)
@@ -703,7 +776,9 @@ def chat_completions():
         
         # 更新会话状态
         assistant_message = {"role": "assistant", "content": full_response_content}
-        _update_conversation_state(request_base_for_update, [last_message, assistant_message])
+        # 在酒馆模式下，不更新状态
+        if not CONFIG.get("tavern_mode_enabled"):
+            _update_conversation_state(request_base_for_update, [last_message, assistant_message])
 
         final_json = format_openai_non_stream_response(full_response_content, model, request_id)
         print(f"🟡 请求 {request_id[:8]} (任务ID: {task_id[:8]}) 响应收集完成。")
@@ -711,15 +786,29 @@ def chat_completions():
 
 
 if __name__ == '__main__':
+    _load_config()  # 在服务器启动时加载配置
     print("======================================================================")
-    print("  LMArena 自动化代理服务器 v8.0 (OpenAI API Ready)")
-    print("  ✨ 新增: /v1/chat/completions (兼容 OpenAI 的对话接口)")
-    print("  ✨ 新增: /inject_openai_history (用于 OpenAI 格式历史注入)")
-    print("  ✨ 新增: /submit_prompt, /get_prompt_job (用于发起对话)")
-    print("  ✨ 新增: /stream_chunk, /get_chunk, /report_result (用于流式传输)")
-    print("  - /submit_injection_job, /get_injection_job (标准注入)")
-    print("  - /submit_tool_result, /get_tool_result_job (返回工具结果)")
-    print("  - /submit_model_fetch_job, /get_model_fetch_job (获取模型)")
-    print("  已在 http://127.0.0.1:5102 启动")
+    print("  🚀 LMArena Automator - 全功能 OpenAI 桥接器已启动")
+    print("  - 监听地址: http://127.0.0.1:5102")
+    print("  - OpenAI API 入口: http://127.0.0.1:5102/v1")
+    print("\n  当前模式 (基于 config.jsonc):")
+    
+    # 根据配置显示当前激活的模式
+    if CONFIG.get("tavern_mode_enabled"):
+        print("  - 🍻 酒馆模式 (Tavern Mode): ✅ 启用")
+        print("  - 🤫 Bypass 模式: ☑️ 已被酒馆模式覆盖 (禁用)")
+    else:
+        print("  - ⚡️ 智能会话模式: ✅ 启用")
+        if CONFIG.get("bypass_enabled"):
+            print("  - 🤫 Bypass 模式: ✅ 启用")
+        else:
+            print("  - 🤫 Bypass 模式: ❌ 禁用")
+
+    print("\n  日志状态:")
+    print(f"  - 服务器请求日志: {'✅' if CONFIG.get('log_server_requests') else '❌'}")
+    print(f"  - 油猴脚本调试日志: {'✅' if CONFIG.get('log_tampermonkey_debug') else '❌'}")
+
+    print("\n  请在浏览器中打开一个 LMArena 的 Direct Chat的历史对话页面并刷新以激活油猴脚本。")
+    print("  修改 config.jsonc 后请重启本服务器。")
     print("======================================================================")
     app.run(host='0.0.0.0', port=5102, threaded=True)

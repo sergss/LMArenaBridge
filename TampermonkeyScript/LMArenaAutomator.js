@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         LMArena History Forger
+// @name         LMArena Automator
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Injects custom conversation history into LMArena.
-// @author       You
+// @version      2.0
+// @description  Injects history, automates prompts, and supports Tavern Mode for LMArena.
+// @author       Lianues
 // @match        https://lmarena.ai/c/*
 // @grant        none
 // @run-at       document-start
@@ -13,7 +13,10 @@
     'use strict';
 
     let config = {
-        bypass_enabled: false // Default value
+        bypass_enabled: false,
+        tavern_mode_enabled: false,
+        log_server_requests: false,
+        log_tampermonkey_debug: false
     };
 
     // --- 配置加载逻辑 (v2 - 从服务器获取) ---
@@ -92,10 +95,10 @@
                 return payload;
             }
 
-            // --- DEBUG LOGS START ---
-            console.log("LMArena History Forger DEBUG: Entering modifyPayload.");
-            console.log("LMArena History Forger DEBUG: history_data object:", history_data);
-            // --- DEBUG LOGS END ---
+            if (config.log_tampermonkey_debug) {
+                console.log("LMArena Automator DEBUG: Entering modifyPayload.");
+                console.log("LMArena Automator DEBUG: history_data object:", history_data);
+            }
 
             // Define the boundaries more robustly
             const startMarker = '"initialState"';
@@ -118,10 +121,10 @@
             }
             // --- END OF CORE FIX ---
 
-            // --- DEBUG LOGS START ---
-            const originalBlock = payload.substring(startIndex, endIndex);
-            console.log("LMArena History Forger DEBUG: Original block to be replaced:", originalBlock);
-            // --- DEBUG LOGS END ---
+            if (config.log_tampermonkey_debug) {
+                const originalBlock = payload.substring(startIndex, endIndex);
+                console.log("LMArena Automator DEBUG: Original block to be replaced:", originalBlock);
+            }
 
             // Extract the parts of the string we want to keep
             const beforePart = payload.substring(0, startIndex);
@@ -130,19 +133,19 @@
             // Construct the new, correctly formatted initialState property
             const newInitialState = `"initialState":${JSON.stringify(history_data)}`;
 
-             // --- DEBUG LOGS START ---
-            console.log("LMArena History Forger DEBUG: New initialState block:", newInitialState);
-            // --- DEBUG LOGS END ---
+            if (config.log_tampermonkey_debug) {
+                console.log("LMArena Automator DEBUG: New initialState block:", newInitialState);
+            }
 
             // Assemble the final payload
             const newPayload = beforePart + newInitialState + afterPart;
 
 
             if (payload !== newPayload) {
-                console.log('LMArena History Forger: Successfully injected conversation history (using robust boundary replacement).');
-                 // --- DEBUG LOGS START ---
-                console.log("LMArena History Forger DEBUG: Final payload (first 500 chars):", newPayload.substring(0, 500));
-                // --- DEBUG LOGS END ---
+                console.log('LMArena Automator: Successfully injected conversation history (using robust boundary replacement).');
+                if (config.log_tampermonkey_debug) {
+                    console.log("LMArena Automator DEBUG: Final payload (first 500 chars):", newPayload.substring(0, 500));
+                }
                 return newPayload;
             }
 
@@ -220,6 +223,40 @@
                 try {
                     const originalOptions = args[1] || {};
                     let bodyObject = JSON.parse(originalOptions.body);
+
+                    // 【【【新功能：酒馆模式请求体修改】】】
+                    if (config.tavern_mode_enabled) {
+                        const messages = bodyObject.messages;
+                        // 检查是否是我们的触发请求：最后一条用户消息内容是单个空格，且后面紧跟一个助手占位符
+                        if (messages && messages.length > 1) {
+                            const lastUserMessageIndex = messages.length - 2;
+                            const lastUserMessage = messages[lastUserMessageIndex];
+                            const assistantPlaceholder = messages[messages.length - 1];
+
+                            // 精确匹配触发文本
+                            if (lastUserMessage.role === 'user' && lastUserMessage.content === '[TAVERN_MODE_TRIGGER]' && assistantPlaceholder.role === 'assistant') {
+                                console.log("LMArena Automator [Tavern Mode]: Detected trigger request. Modifying body...");
+
+                                // 移除我们添加的空格用户消息
+                                messages.splice(lastUserMessageIndex, 1);
+
+                                // 获取新的倒数第二条消息（现在是原始对话的最后一条）
+                                const newLastMessage = messages.length > 1 ? messages[messages.length - 2] : null;
+
+                                if (newLastMessage) {
+                                    // 更新助手占位符的父ID，使其指向它前面的那条消息
+                                    assistantPlaceholder.parentMessageIds = [newLastMessage.id];
+                                    console.log(`LMArena Automator [Tavern Mode]: Assistant placeholder's parent ID updated to ${newLastMessage.id}.`);
+                                } else if (messages.length === 1 && messages[0].role === 'assistant') {
+                                    // 如果移除后只剩下助手占位符，说明这是第一条消息
+                                    assistantPlaceholder.parentMessageIds = [];
+                                    console.log("LMArena Automator [Tavern Mode]: This is the first message, parent ID cleared.");
+                                }
+                                
+                                console.log("LMArena Automator [Tavern Mode]: Body successfully modified.");
+                            }
+                        }
+                    }
 
                     // 首先处理模型ID替换 (原有逻辑)
                     const targetModelId = localStorage.getItem(MODEL_ID_STORAGE_KEY);
@@ -326,7 +363,7 @@
 
 
         // Helper function to wait for an element with React props
-        async function findElementWithReactProps(selector, timeout = 5000) {
+        async function findElementWithReactProps(selector, timeout = 30000) {
             const startTime = Date.now();
             while (Date.now() - startTime < timeout) {
                 const element = document.querySelector(selector);
