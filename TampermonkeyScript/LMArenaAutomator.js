@@ -305,46 +305,26 @@
                 performInjection(jobData);
                 console.log("LMArena History Forger: Injection logic executed.");
 
-                // 【【【最终修复：等待 DOM 就绪后再发送完成信号】】】
+                // 【【【修复：移除DOM就绪检查，直接发送完成信号以避免阻塞】】】
                 if (injectionId) {
-                    console.log(`LMArena History Forger: Waiting for DOM to be ready before sending signal for ${injectionId}...`);
-                    
-                    const startTime = Date.now();
-                    const interval = setInterval(async () => {
-                        const textarea = document.querySelector('textarea[name="text"]');
-                        const submitButton = document.querySelector('button[type="submit"]');
-
-                        // 检查元素是否存在且按钮可用
-                        if (textarea && submitButton && !submitButton.disabled) {
-                            clearInterval(interval);
-                            console.log(`LMArena History Forger: DOM is ready. Sending completion signal for ${injectionId}.`);
-                            try {
-                                await fetch(`${SERVER_URL}/signal_injection_complete`, {
-                                    method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({
-                                        injection_id: injectionId,
-                                        page_html: document.documentElement.outerHTML
-                                    })
-                                });
-                                console.log("LMArena History Forger: Completion signal sent successfully.");
-                            } catch (e) {
-                                console.error("LMArena History Forger: Failed to send completion signal:", e);
-                            }
-                        } else if (Date.now() - startTime > 15000) { // 15秒超时
-                            clearInterval(interval);
-                            console.error("LMArena History Forger: Timed out waiting for DOM to become ready. Sending signal anyway to avoid blocking server.");
-                             await fetch(`${SERVER_URL}/signal_injection_complete`, {
+                    console.log(`LMArena History Forger: Sending completion signal for ${injectionId} immediately.`);
+                    // 为了确保之前的JS代码有机会执行完毕，我们稍微延迟一下再发送信号
+                    setTimeout(async () => {
+                        try {
+                            await fetch(`${SERVER_URL}/signal_injection_complete`, {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({
                                     injection_id: injectionId,
-                                    error: "timeout",
-                                    page_html: document.documentElement.outerHTML
+                                    status: 'completed_without_dom_check',
+                                    page_html: document.documentElement.outerHTML // 仍然发送HTML以便调试
                                 })
                             });
+                            console.log("LMArena History Forger: Completion signal sent successfully (without DOM check).");
+                        } catch (e) {
+                            console.error("LMArena History Forger: Failed to send completion signal:", e);
                         }
-                    }, 200); // 每 200ms 检查一次
+                    }, 500); // 延迟500毫秒
                 }
 
                 // 注入完成后，继续轮询新任务
