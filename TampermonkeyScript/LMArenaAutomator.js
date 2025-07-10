@@ -12,6 +12,26 @@
 (function() {
     'use strict';
 
+    let config = {
+        bypass_enabled: false // Default value
+    };
+
+    // --- 配置加载逻辑 (v2 - 从服务器获取) ---
+    async function loadConfig() {
+        try {
+            const response = await fetch(`${SERVER_URL}/get_config`);
+            if (response.ok) {
+                config = await response.json();
+                console.log("LMArena Automator: Config loaded successfully from server.", config);
+            } else {
+                 console.warn(`LMArena Automator: Failed to fetch config from server (status: ${response.status}). Using default values.`);
+            }
+        } catch (e) {
+            console.error("LMArena Automator: Error fetching config from server. Using default values.", e);
+        }
+    }
+
+
     const SERVER_URL = 'http://127.0.0.1:5102';
     const STORAGE_KEY = 'pending_history_injection';
     const MODEL_ID_STORAGE_KEY = 'lmarena_target_model_id'; // 新增：用于存储模型 ID 的键
@@ -196,26 +216,60 @@
 
             if (typeof url === 'string' && url.includes('/api/stream/post-to-evaluation/')) {
                 console.log('LMArena Automator: Intercepted model evaluation request:', url);
+                
+                try {
+                    const originalOptions = args[1] || {};
+                    let bodyObject = JSON.parse(originalOptions.body);
 
-                const targetModelId = localStorage.getItem(MODEL_ID_STORAGE_KEY);
-                if (targetModelId) {
-                    try {
-                        const request = new Request(...args);
-                        let body = await request.json();
-                        body.modelAId = targetModelId;
-                        if (body.messages && body.messages.length > 0) {
-                            const lastMessage = body.messages[body.messages.length - 1];
+                    // 首先处理模型ID替换 (原有逻辑)
+                    const targetModelId = localStorage.getItem(MODEL_ID_STORAGE_KEY);
+                    if (targetModelId) {
+                        bodyObject.modelAId = targetModelId;
+                        if (bodyObject.messages && bodyObject.messages.length > 0) {
+                            const lastMessage = bodyObject.messages[bodyObject.messages.length - 1];
                             if (lastMessage.role === 'assistant') {
                                 lastMessage.modelId = targetModelId;
                             }
                         }
-                        newArgs[1] = { ...newArgs[1], body: JSON.stringify(body) };
                         console.log('LMArena Automator: Modified request body with new model ID.');
-                    } catch (e) {
-                        console.error("LMArena Automator: Error modifying fetch request:", e);
                     }
+
+                    // 【【【新功能：注入空 User 请求 (v3 - 正确实现)】】】
+                    if (config.bypass_enabled && bodyObject.messages && bodyObject.messages.length >= 2) {
+                        console.log("LMArena Automator: Bypass enabled. Modifying request body to inject empty message.");
+                        
+                        const messages = bodyObject.messages;
+                        const originalUserMessage = messages[messages.length - 2];
+                        const assistantPlaceholder = messages[messages.length - 1];
+
+                        if (originalUserMessage.role === 'user' && assistantPlaceholder.role === 'assistant') {
+                            const emptyUserMessage = {
+                                ...originalUserMessage, // 继承大部分属性
+                                id: crypto.randomUUID(), // 生成新的唯一ID
+                                content: " ", // 内容为空
+                                parentMessageIds: [originalUserMessage.id] // 父消息是原始的用户消息
+                            };
+
+                            // 更新模型占位符的父ID，使其指向新的空消息
+                            assistantPlaceholder.parentMessageIds = [emptyUserMessage.id];
+                            
+                            // 在原始用户消息和模型占位符之间插入新消息
+                            messages.splice(messages.length - 1, 0, emptyUserMessage);
+                            
+                            console.log("LMArena Automator: Successfully injected empty user message into the request.");
+                        } else {
+                            console.warn("LMArena Automator: Bypass logic failed. Message structure did not match expected 'user' -> 'assistant' at the end.");
+                        }
+                    }
+                    
+                    // 使用修改后的 body 更新请求参数
+                    newArgs[1] = { ...originalOptions, body: JSON.stringify(bodyObject) };
+
+                } catch (e) {
+                    console.error("LMArena Automator: Error processing fetch request:", e);
+                    // 如果处理失败，继续使用原始参数
                 }
-                
+
                 // 执行 fetch
                 const response = await originalFetch.apply(this, newArgs);
                 const taskId = sessionStorage.getItem('current_task_id');
@@ -357,8 +411,9 @@
 
     // --- 主执行逻辑 ---
     async function main() {
+        await loadConfig(); // 加载配置
         hookFetch(); // 在脚本开始时就注入 fetch 钩子
-
+    
         const pendingData = localStorage.getItem(STORAGE_KEY);
         if (pendingData) {
             console.log("LMArena History Forger: Found pending data in localStorage. Attempting injection.");

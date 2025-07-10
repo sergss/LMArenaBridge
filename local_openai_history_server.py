@@ -119,6 +119,29 @@ LAST_CONVERSATION_STATE = None
 
 # --- API 端点 ---
 
+@app.route('/get_config', methods=['GET'])
+def get_config():
+    """读取并返回 config.jsonc 的内容，同时移除注释。"""
+    try:
+        # 注意这里的路径，相对于服务器脚本的位置
+        with open('config.jsonc', 'r', encoding='utf-8') as f:
+            # 读取文件内容
+            jsonc_content = f.read()
+            # 移除单行和多行注释
+            # 移除单行注释 // ...
+            json_content = re.sub(r'//.*', '', jsonc_content)
+            # 移除多行注释 /* ... */ (非贪婪模式)
+            json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
+            
+            config_data = json.loads(json_content)
+            return jsonify(config_data)
+    except FileNotFoundError:
+        print("❌ 错误: 'config.jsonc' 文件未找到。")
+        return jsonify({"error": "Config file not found"}), 404
+    except json.JSONDecodeError:
+        print("❌ 错误: 'config.jsonc' 文件格式不正确。")
+        return jsonify({"error": "Config file is malformed"}), 500
+
 @app.route('/reset_state', methods=['POST'])
 def reset_state():
     """手动重置会话缓存"""

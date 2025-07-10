@@ -14,6 +14,7 @@
     *   **【新】** 油猴脚本在注入历史后会自动将页面上的模型列表发回服务器，服务器会自动比较并将新模型添加到 `models.json`，无需手动维护！
 *   **⚙️ 浏览器自动化**: 使用配套的油猴脚本（Tampermonkey）自动在浏览器中执行注入、输入和获取响应等操作。
 *   **🔄 会话状态保持**: 能够智能检测连续对话，减少不必要的历史注入，提升效率。
+*   **🤫 [实验性] 绕过敏感词检测**: 通过在请求中额外注入一个空的用户消息，以绕过平台的敏感词审查。此功能可在 `TampermonkeyScript/config.jsonc` 中配置。
 
 ## 🤔 它是如何工作的？
 
@@ -101,7 +102,8 @@ sequenceDiagram
 ├── requirements.txt            # Python 依赖包列表 📦
 ├── README.md                   # 就是你现在正在看的这个文件 👋
 └── TampermonkeyScript/
-    └── LMArenaAutomator.js     # 前端自动化油猴脚本 🐵
+    ├── LMArenaAutomator.js     # 前端自动化油猴脚本 🐵
+    └── config.jsonc            # 功能配置文件 (例如：敏感词绕过开关) ⚙️
 ```
 
 **享受在 LMArena 的模型世界中自由探索的乐趣吧！** 💖

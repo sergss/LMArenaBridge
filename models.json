@@ -88,5 +88,6 @@
     "flux-1-kontext-dev": "eb90ae46-a73a-4f27-be8b-40f090592c9a",
     "gemini-2.0-flash-001": "7a55108b-b997-4cff-a72f-5aa83beee918",
     "seededit-3.0": "e2969ebb-6450-4bc4-87c9-bbdcf95840da",
-    "grok-4-0709": "774bcb6c-9787-4d7e-981d-b06ddfa1c3e7"
+    "grok-4-0709": "774bcb6c-9787-4d7e-981d-b06ddfa1c3e7",
+    "ernie-x1-turbo-32k-preview": "1efdf1f1-8879-493b-8e4a-14b61e978847"
 }
