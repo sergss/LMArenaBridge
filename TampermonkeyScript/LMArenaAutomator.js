@@ -38,11 +38,14 @@
     const SERVER_URL = 'http://127.0.0.1:5102';
     const STORAGE_KEY = 'pending_history_injection';
     const MODEL_ID_STORAGE_KEY = 'lmarena_target_model_id'; // 新增：用于存储模型 ID 的键
+    let isReloading = false; // 新增：防止在页面重载时执行异步代码
 
     console.log("LMArena History Forger: Script started...");
 
     // --- 轮询逻辑 ---
     async function pollForJob() {
+        if (isReloading) return; // 如果正在重载，则停止轮询
+
         console.log("LMArena History Forger: Polling for new injection job...");
         try {
             const response = await fetch(`${SERVER_URL}/get_injection_job`);
@@ -53,16 +56,17 @@
 
             if (data.status === 'success' && data.job) {
                 console.log("LMArena History Forger: Received new job. Storing and reloading.", data.job);
+                isReloading = true; // 设置重载标志
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(data.job));
                 location.reload();
             } else {
                 // If no job, wait and poll again
-                setTimeout(pollForJob, 1000); // 3-second polling interval
+                if (!isReloading) setTimeout(pollForJob, 1000); // 1-second polling interval
             }
         } catch (error) {
             console.error("LMArena History Forger: Error polling for job:", error);
             // Wait longer before retrying on error
-            setTimeout(pollForJob, 10000);
+            if (!isReloading) setTimeout(pollForJob, 10000);
         }
     }
 
@@ -223,83 +227,76 @@
                 try {
                     const originalOptions = args[1] || {};
                     let bodyObject = JSON.parse(originalOptions.body);
+                    let messages = bodyObject.messages; // 在顶层声明，确保所有修改都在同一个引用上
 
-                    // 【【【新功能：酒馆模式请求体修改】】】
-                    if (config.tavern_mode_enabled) {
-                        const messages = bodyObject.messages;
-                        // 检查是否是我们的触发请求：最后一条用户消息内容是单个空格，且后面紧跟一个助手占位符
-                        if (messages && messages.length > 1) {
-                            const lastUserMessageIndex = messages.length - 2;
-                            const lastUserMessage = messages[lastUserMessageIndex];
-                            const assistantPlaceholder = messages[messages.length - 1];
+                    // --- 按顺序处理请求修改 ---
 
-                            // 精确匹配触发文本
-                            if (lastUserMessage.role === 'user' && lastUserMessage.content === '[TAVERN_MODE_TRIGGER]' && assistantPlaceholder.role === 'assistant') {
-                                console.log("LMArena Automator [Tavern Mode]: Detected trigger request. Modifying body...");
+                    // 1. 酒馆模式触发词净化 (如果启用)
+                    if (config.tavern_mode_enabled && messages && messages.length > 1) {
+                        const lastUserMessageIndex = messages.length - 2;
+                        const lastUserMessage = messages[lastUserMessageIndex];
+                        const assistantPlaceholder = messages[messages.length - 1];
 
-                                // 移除我们添加的空格用户消息
-                                messages.splice(lastUserMessageIndex, 1);
-
-                                // 获取新的倒数第二条消息（现在是原始对话的最后一条）
-                                const newLastMessage = messages.length > 1 ? messages[messages.length - 2] : null;
-
-                                if (newLastMessage) {
-                                    // 更新助手占位符的父ID，使其指向它前面的那条消息
-                                    assistantPlaceholder.parentMessageIds = [newLastMessage.id];
-                                    console.log(`LMArena Automator [Tavern Mode]: Assistant placeholder's parent ID updated to ${newLastMessage.id}.`);
-                                } else if (messages.length === 1 && messages[0].role === 'assistant') {
-                                    // 如果移除后只剩下助手占位符，说明这是第一条消息
-                                    assistantPlaceholder.parentMessageIds = [];
-                                    console.log("LMArena Automator [Tavern Mode]: This is the first message, parent ID cleared.");
-                                }
-                                
-                                console.log("LMArena Automator [Tavern Mode]: Body successfully modified.");
+                        if (lastUserMessage.role === 'user' && lastUserMessage.content === '[TAVERN_MODE_TRIGGER]' && assistantPlaceholder.role === 'assistant') {
+                            console.log("LMArena Automator [Tavern Mode]: Detected and removing trigger message.");
+                            messages.splice(lastUserMessageIndex, 1); // 直接修改共享的 messages 变量
+                            
+                            const newLastMessage = messages.length > 1 ? messages[messages.length - 2] : null;
+                            if (newLastMessage) {
+                                assistantPlaceholder.parentMessageIds = [newLastMessage.id];
+                            } else if (messages.length === 1 && messages[0].role === 'assistant') {
+                                assistantPlaceholder.parentMessageIds = [];
                             }
                         }
                     }
 
-                    // 首先处理模型ID替换 (原有逻辑)
+                    // 2. Bypass 模式注入 (如果启用) - 【最终修复版】
+                    if (config.bypass_enabled && messages && messages.length >= 1) {
+                        const assistantPlaceholderIndex = messages.length - 1;
+                        const assistantPlaceholder = messages[assistantPlaceholderIndex];
+
+                        // 确保最后一条消息是助手占位符
+                        if (assistantPlaceholder.role === 'assistant') {
+                            // 找到它的父消息，无论父消息是什么角色
+                            const parentMessageIndex = assistantPlaceholderIndex - 1;
+                            if (parentMessageIndex >= 0) {
+                                const parentMessage = messages[parentMessageIndex];
+                                
+                                console.log("LMArena Automator [Bypass Mode]: Injecting empty user message.");
+
+                                // 基于父消息创建新的Bypass消息
+                                const emptyUserMessage = {
+                                    ...parentMessage, // 继承大部分属性以保持一致性
+                                    role: 'user',     // 角色必须是user
+                                    id: crypto.randomUUID(),
+                                    content: " ",
+                                    parentMessageIds: [parentMessage.id] // 父级是它前面的消息
+                                };
+
+                                // 更新助手占位符的父ID，使其指向新的Bypass消息
+                                assistantPlaceholder.parentMessageIds = [emptyUserMessage.id];
+                                
+                                // 将Bypass消息插入到正确的位置
+                                messages.splice(assistantPlaceholderIndex, 0, emptyUserMessage);
+                            }
+                        }
+                    }
+                    
+                    // 3. 模型ID替换 (始终执行)
                     const targetModelId = localStorage.getItem(MODEL_ID_STORAGE_KEY);
                     if (targetModelId) {
                         bodyObject.modelAId = targetModelId;
-                        if (bodyObject.messages && bodyObject.messages.length > 0) {
-                            const lastMessage = bodyObject.messages[bodyObject.messages.length - 1];
+                        if (messages.length > 0) {
+                            const lastMessage = messages[messages.length - 1];
                             if (lastMessage.role === 'assistant') {
                                 lastMessage.modelId = targetModelId;
                             }
                         }
                         console.log('LMArena Automator: Modified request body with new model ID.');
                     }
-
-                    // 【【【新功能：注入空 User 请求 (v3 - 正确实现)】】】
-                    if (config.bypass_enabled && bodyObject.messages && bodyObject.messages.length >= 2) {
-                        console.log("LMArena Automator: Bypass enabled. Modifying request body to inject empty message.");
-                        
-                        const messages = bodyObject.messages;
-                        const originalUserMessage = messages[messages.length - 2];
-                        const assistantPlaceholder = messages[messages.length - 1];
-
-                        if (originalUserMessage.role === 'user' && assistantPlaceholder.role === 'assistant') {
-                            const emptyUserMessage = {
-                                ...originalUserMessage, // 继承大部分属性
-                                id: crypto.randomUUID(), // 生成新的唯一ID
-                                content: " ", // 内容为空
-                                parentMessageIds: [originalUserMessage.id] // 父消息是原始的用户消息
-                            };
-
-                            // 更新模型占位符的父ID，使其指向新的空消息
-                            assistantPlaceholder.parentMessageIds = [emptyUserMessage.id];
-                            
-                            // 在原始用户消息和模型占位符之间插入新消息
-                            messages.splice(messages.length - 1, 0, emptyUserMessage);
-                            
-                            console.log("LMArena Automator: Successfully injected empty user message into the request.");
-                        } else {
-                            console.warn("LMArena Automator: Bypass logic failed. Message structure did not match expected 'user' -> 'assistant' at the end.");
-                        }
-                    }
                     
-                    // 使用修改后的 body 更新请求参数
+                    // 使用最终修改过的 body 更新请求参数
+                    bodyObject.messages = messages; // 将最终修改过的数组写回
                     newArgs[1] = { ...originalOptions, body: JSON.stringify(bodyObject) };
 
                 } catch (e) {
@@ -396,19 +393,15 @@
                 return;
             }
     
-            // 找到 React Fiber 节点的 key (guaranteed by helper)
-            const reactPropsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
-    
-            // 直接调用 React 的 onChange 事件处理器
-            const props = textarea[reactPropsKey];
-            if (props && typeof props.onChange === 'function') {
-                const mockEvent = { target: { value: promptText } };
-                props.onChange(mockEvent);
-                console.log("LMArena Automator: React onChange handler invoked.");
-            } else {
-                console.error("LMArena Automator: Could not find onChange handler in React props.");
-                return;
-            }
+            // 【v4 - 健壮性修复】
+            // 使用原生事件派发来模拟输入，以避免直接调用React内部函数，
+            // 这种方法更稳定，不易受网站更新影响，并能更好地遵循React的生命周期。
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+            nativeInputValueSetter.call(textarea, promptText);
+
+            const inputEvent = new Event('input', { bubbles: true });
+            textarea.dispatchEvent(inputEvent);
+            console.log("LMArena Automator: Prompt text set and 'input' event dispatched.");
     
             // 等待 React 完成状态更新和重新渲染
             await new Promise(resolve => setTimeout(resolve, 150));
@@ -429,6 +422,8 @@
         }
 
     async function pollForPromptJob() {
+        if (isReloading) return; // 如果正在重载，则停止轮询
+
         try {
             const response = await fetch(`${SERVER_URL}/get_prompt_job`);
             const data = await response.json();
@@ -441,7 +436,9 @@
         } catch (error) {
             // 静默处理错误
         } finally {
-            setTimeout(pollForPromptJob, 3000);
+            if (!isReloading) {
+                setTimeout(pollForPromptJob, 3000);
+            }
         }
     }
 

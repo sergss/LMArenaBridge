@@ -547,11 +547,6 @@ def _load_config():
             json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
             CONFIG = json.loads(json_content)
             print("✅ [Config] 配置文件 'config.jsonc' 加载成功。")
-            # 在这里检查互斥条件
-            if CONFIG.get("tavern_mode_enabled") and CONFIG.get("bypass_enabled"):
-                print("⚠️ [Config Warning] 'tavern_mode_enabled' 和 'bypass_enabled' 不能同时为 true。")
-                print("   > 'bypass_enabled' 将被忽略。")
-                CONFIG["bypass_enabled"] = False
     except FileNotFoundError:
         print("❌ [Config] 错误: 'config.jsonc' 文件未找到。将使用默认设置。")
         CONFIG = {"bypass_enabled": False, "tavern_mode_enabled": False}
@@ -791,24 +786,22 @@ if __name__ == '__main__':
     print("  🚀 LMArena Automator - 全功能 OpenAI 桥接器已启动")
     print("  - 监听地址: http://127.0.0.1:5102")
     print("  - OpenAI API 入口: http://127.0.0.1:5102/v1")
-    print("\n  当前模式 (基于 config.jsonc):")
+    print("\n  当前配置 (读取自 config.jsonc):")
     
     # 根据配置显示当前激活的模式
-    if CONFIG.get("tavern_mode_enabled"):
-        print("  - 🍻 酒馆模式 (Tavern Mode): ✅ 启用")
-        print("  - 🤫 Bypass 模式: ☑️ 已被酒馆模式覆盖 (禁用)")
-    else:
-        print("  - ⚡️ 智能会话模式: ✅ 启用")
-        if CONFIG.get("bypass_enabled"):
-            print("  - 🤫 Bypass 模式: ✅ 启用")
-        else:
-            print("  - 🤫 Bypass 模式: ❌ 禁用")
+    tavern_mode_status = '✅ 启用' if CONFIG.get('tavern_mode_enabled') else '❌ 禁用'
+    bypass_status = '✅ 启用' if CONFIG.get('bypass_enabled') else '❌ 禁用'
+    server_log_status = '✅ 启用' if CONFIG.get('log_server_requests') else '❌ 禁用'
+    tampermonkey_log_status = '✅ 启用' if CONFIG.get('log_tampermonkey_debug') else '❌ 禁用'
+
+    print(f"  - 模式: 🍻 酒馆模式 (Tavern Mode) - {tavern_mode_status}")
+    print(f"  - 增强: 🤫 Bypass 功能 - {bypass_status}")
 
     print("\n  日志状态:")
-    print(f"  - 服务器请求日志: {'✅' if CONFIG.get('log_server_requests') else '❌'}")
-    print(f"  - 油猴脚本调试日志: {'✅' if CONFIG.get('log_tampermonkey_debug') else '❌'}")
+    print(f"  - 服务器请求日志: {server_log_status}")
+    print(f"  - 油猴脚本调试日志: {tampermonkey_log_status}")
 
-    print("\n  请在浏览器中打开一个 LMArena 的 Direct Chat的历史对话页面并刷新以激活油猴脚本。")
+    print("\n  请在浏览器中打开一个 LMArena 的 Direct Chat 的历史对话页面并刷新以激活油猴脚本。")
     print("  修改 config.jsonc 后请重启本服务器。")
     print("======================================================================")
     app.run(host='0.0.0.0', port=5102, threaded=True)
