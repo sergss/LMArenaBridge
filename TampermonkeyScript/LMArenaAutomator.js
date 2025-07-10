@@ -66,22 +66,66 @@
         console.log("LMArena History Forger: Updated history data with current session ID.");
 
 
-        // Regex to find the specific initialState object for EvaluationStoreProvider
-        const searchPattern = /("initialState"\s*:\s*\{"id":"[a-f0-9\-]+","userId":"[a-f0-9\-]+",.*?"maskedEvaluations":\[.*?\]\s*\},"data-sentry-element":"EvaluationStoreProvider")/g;
-
-        // Replacement string
-        const replacement = `"initialState":${JSON.stringify(history_data)},"data-sentry-element":"EvaluationStoreProvider"`;
-
+        // Final, more robust string manipulation with extensive logging
         function modifyPayload(payload) {
-            if (typeof payload !== 'string') return payload;
-
-            if (payload.includes('"EvaluationStoreProvider"')) {
-                const modifiedPayload = payload.replace(searchPattern, () => replacement);
-                if (modifiedPayload !== payload) {
-                    console.log('LMArena History Forger: Successfully injected conversation history.');
-                    return modifiedPayload;
-                }
+            if (typeof payload !== 'string' || !payload.includes('"EvaluationStoreProvider"') || !payload.includes('"initialState"')) {
+                return payload;
             }
+
+            // --- DEBUG LOGS START ---
+            console.log("LMArena History Forger DEBUG: Entering modifyPayload.");
+            console.log("LMArena History Forger DEBUG: history_data object:", history_data);
+            // --- DEBUG LOGS END ---
+
+            // Define the boundaries more robustly
+            const startMarker = '"initialState"';
+            const endMarker = ',"data-sentry-element":"EvaluationStoreProvider"';
+
+            // --- CORE FIX: Reverse Search ---
+            // First, find the unique end marker for our target component.
+            const endIndex = payload.indexOf(endMarker);
+            if (endIndex === -1) {
+                console.log("LMArena History Forger DEBUG: endMarker not found. Cannot proceed.");
+                return payload;
+            }
+
+            // Now, search backwards from the end marker to find the *closest* start marker.
+            // This ensures we get the initialState for the correct component.
+            const startIndex = payload.lastIndexOf(startMarker, endIndex);
+            if (startIndex === -1) {
+                console.log("LMArena History Forger DEBUG: startMarker not found before endMarker.");
+                return payload;
+            }
+            // --- END OF CORE FIX ---
+
+            // --- DEBUG LOGS START ---
+            const originalBlock = payload.substring(startIndex, endIndex);
+            console.log("LMArena History Forger DEBUG: Original block to be replaced:", originalBlock);
+            // --- DEBUG LOGS END ---
+
+            // Extract the parts of the string we want to keep
+            const beforePart = payload.substring(0, startIndex);
+            const afterPart = payload.substring(endIndex); // This includes the endMarker itself
+
+            // Construct the new, correctly formatted initialState property
+            const newInitialState = `"initialState":${JSON.stringify(history_data)}`;
+
+             // --- DEBUG LOGS START ---
+            console.log("LMArena History Forger DEBUG: New initialState block:", newInitialState);
+            // --- DEBUG LOGS END ---
+
+            // Assemble the final payload
+            const newPayload = beforePart + newInitialState + afterPart;
+
+
+            if (payload !== newPayload) {
+                console.log('LMArena History Forger: Successfully injected conversation history (using robust boundary replacement).');
+                 // --- DEBUG LOGS START ---
+                console.log("LMArena History Forger DEBUG: Final payload (first 500 chars):", newPayload.substring(0, 500));
+                // --- DEBUG LOGS END ---
+                return newPayload;
+            }
+
             return payload;
         }
 
