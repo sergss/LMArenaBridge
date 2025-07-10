@@ -227,45 +227,71 @@
     }
 
 
-    // --- 新功能：发送 Prompt (v3 - React Internals) ---
-    async function typeAndSubmitPrompt(promptText) {
-        console.log(`LMArena Automator: Typing prompt via React Internals: "${promptText}"`);
-        const textarea = document.querySelector('textarea[name="text"]');
-        const submitButton = document.querySelector('button[type="submit"]');
-
-        if (!textarea || !submitButton) {
-            console.error("LMArena Automator: Textarea or submit button not found.");
-            return;
+        // Helper function to wait for an element with React props
+        async function findElementWithReactProps(selector, timeout = 5000) {
+            const startTime = Date.now();
+            while (Date.now() - startTime < timeout) {
+                const element = document.querySelector(selector);
+                if (element) {
+                    const reactPropsKey = Object.keys(element).find(key => key.startsWith('__reactProps$'));
+                    if (reactPropsKey) {
+                        return element; // Found element with React props
+                    }
+                }
+                // Wait a bit before retrying
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+            console.error(`LMArena Automator: Timed out waiting for element with React props: ${selector}`);
+            return null; // Timed out
         }
-
-        // 找到 React Fiber 节点的 key
-        const reactPropsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
-        if (!reactPropsKey) {
-            console.error("LMArena Automator: Could not find React props on the textarea.");
-            return;
+    
+        // --- 新功能：发送 Prompt (v3 - React Internals, with polling) ---
+        async function typeAndSubmitPrompt(promptText) {
+            console.log(`LMArena Automator: Typing prompt via React Internals: "${promptText}"`);
+    
+            const textarea = await findElementWithReactProps('textarea[name="text"]');
+            if (!textarea) {
+                // Error is already logged by the helper function
+                return;
+            }
+    
+            const submitButton = document.querySelector('button[type="submit"]');
+            if (!submitButton) {
+                console.error("LMArena Automator: Submit button not found.");
+                return;
+            }
+    
+            // 找到 React Fiber 节点的 key (guaranteed by helper)
+            const reactPropsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+    
+            // 直接调用 React 的 onChange 事件处理器
+            const props = textarea[reactPropsKey];
+            if (props && typeof props.onChange === 'function') {
+                const mockEvent = { target: { value: promptText } };
+                props.onChange(mockEvent);
+                console.log("LMArena Automator: React onChange handler invoked.");
+            } else {
+                console.error("LMArena Automator: Could not find onChange handler in React props.");
+                return;
+            }
+    
+            // 等待 React 完成状态更新和重新渲染
+            await new Promise(resolve => setTimeout(resolve, 150));
+    
+            if (!submitButton.disabled) {
+                submitButton.click();
+                console.log("LMArena Automator: Prompt submitted successfully.");
+            } else {
+                // Sometimes React takes a moment longer to enable the button. Retry once.
+                await new Promise(resolve => setTimeout(resolve, 200));
+                if (!submitButton.disabled) {
+                    submitButton.click();
+                    console.log("LMArena Automator: Prompt submitted successfully (on second try).");
+                } else {
+                    console.error("LMArena Automator: Submit button is still disabled after typing.");
+                }
+            }
         }
-
-        // 直接调用 React 的 onChange 事件处理器
-        const props = textarea[reactPropsKey];
-        if (props && typeof props.onChange === 'function') {
-            const mockEvent = { target: { value: promptText } };
-            props.onChange(mockEvent);
-            console.log("LMArena Automator: React onChange handler invoked.");
-        } else {
-            console.error("LMArena Automator: Could not find onChange handler in React props.");
-            return;
-        }
-
-        // 等待 React 完成状态更新和重新渲染
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        if (!submitButton.disabled) {
-            submitButton.click();
-            console.log("LMArena Automator: Prompt submitted successfully via React internals.");
-        } else {
-            console.error("LMArena Automator: Submit button is still disabled even after using React internals.");
-        }
-    }
 
     async function pollForPromptJob() {
         try {
@@ -305,26 +331,46 @@
                 performInjection(jobData);
                 console.log("LMArena History Forger: Injection logic executed.");
 
-                // 【【【修复：移除DOM就绪检查，直接发送完成信号以避免阻塞】】】
+                // 【【【最终修复：等待 DOM 就绪后再发送完成信号】】】
                 if (injectionId) {
-                    console.log(`LMArena History Forger: Sending completion signal for ${injectionId} immediately.`);
-                    // 为了确保之前的JS代码有机会执行完毕，我们稍微延迟一下再发送信号
-                    setTimeout(async () => {
-                        try {
-                            await fetch(`${SERVER_URL}/signal_injection_complete`, {
+                    console.log(`LMArena History Forger: Waiting for DOM to be ready before sending signal for ${injectionId}...`);
+                    
+                    const startTime = Date.now();
+                    const interval = setInterval(async () => {
+                        const textarea = document.querySelector('textarea[name="text"]');
+                        const submitButton = document.querySelector('button[type="submit"]');
+
+                        // 检查元素是否存在
+                        if (textarea && submitButton) {
+                            clearInterval(interval);
+                            console.log(`LMArena History Forger: DOM is ready. Sending completion signal for ${injectionId}.`);
+                            try {
+                                await fetch(`${SERVER_URL}/signal_injection_complete`, {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({
+                                        injection_id: injectionId,
+                                        page_html: document.documentElement.outerHTML
+                                    })
+                                });
+                                console.log("LMArena History Forger: Completion signal sent successfully.");
+                            } catch (e) {
+                                console.error("LMArena History Forger: Failed to send completion signal:", e);
+                            }
+                        } else if (Date.now() - startTime > 15000) { // 15秒超时
+                            clearInterval(interval);
+                            console.error("LMArena History Forger: Timed out waiting for DOM to become ready. Sending signal anyway to avoid blocking server.");
+                             await fetch(`${SERVER_URL}/signal_injection_complete`, {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({
                                     injection_id: injectionId,
-                                    status: 'completed_without_dom_check',
-                                    page_html: document.documentElement.outerHTML // 仍然发送HTML以便调试
+                                    error: "timeout",
+                                    page_html: document.documentElement.outerHTML
                                 })
                             });
-                            console.log("LMArena History Forger: Completion signal sent successfully (without DOM check).");
-                        } catch (e) {
-                            console.error("LMArena History Forger: Failed to send completion signal:", e);
                         }
-                    }, 500); // 延迟500毫秒
+                    }, 200); // 每 200ms 检查一次
                 }
 
                 // 注入完成后，继续轮询新任务
