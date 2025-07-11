@@ -203,10 +203,34 @@
         setTimeout(pollForPromptJob, 2000);
     }
 
+    async function sendPageSource() {
+        // 等待页面完全加载
+        if (document.readyState === "complete") {
+            console.log("LMArena Automator: Page loaded. Sending source to server for model check...");
+            try {
+                const htmlContent = document.documentElement.outerHTML;
+                await fetch(`${SERVER_URL}/update_models`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/html' },
+                    body: htmlContent
+                });
+            } catch (e) {
+                console.error("[Automator] Failed to send page source to server:", e);
+            }
+        }
+    }
+
     async function main() {
         await loadConfig();
         hookFetch();
         pollForPromptJob();
+
+        // 监听文档加载状态
+        if (document.readyState === "complete") {
+            sendPageSource();
+        } else {
+            window.addEventListener('load', sendPageSource);
+        }
     }
 
     main();
