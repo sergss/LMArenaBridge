@@ -17,14 +17,14 @@
   // !!! 重要提示 !!!
   // 此模式现在可以和 "bypass_enabled" 协同工作。
   // 修改后需要重启 Python 服务器才能生效。
-  "tavern_mode_enabled": true,
+  "tavern_mode_enabled": false,
 
   // --- 日志与调试 ---
 
   // 开关：服务器请求体日志
   // 设置为 true，本地 Python 服务器会在控制台打印收到的完整 OpenAI 请求体。
   // 用于调试客户端发送的数据。默认为 false。
-  "log_server_requests": true,
+  "log_server_requests": false,
 
   // 开关：油猴脚本调试日志
   // 设置为 true，浏览器控制台会打印详细的 "DEBUG" 级别日志。
@@ -39,5 +39,5 @@
   // 2. 所有服务器端的操作和错误日志都会被写入该文件。
   // 3. 所有浏览器端的 console.log/warn/error 日志也会被捕获并发送到服务器，写入同一个文件。
   // 这对于完整追踪一次请求的生命周期非常有用。默认为 false。
-  "enable_comprehensive_logging": true
+  "enable_comprehensive_logging": false
 }
