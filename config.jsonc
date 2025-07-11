@@ -1,7 +1,7 @@
 {
   // 版本号
   // 用于程序更新检查，请不要手动修改。
-  "version": "1.6.1",
+  "version": "1.6.2",
 
   // --- 更新设置 ---
   // 开关：自动检查更新
@@ -64,6 +64,16 @@
   // 当 enable_anti_bot_hanging 为 true 时生效。定义挂机标签页发送保持活跃消息的时间间隔。
   // 默认 120 秒（2 分钟）。
   "hanging_interval_seconds": 60,
+
+  // --- 安全设置 ---
+
+  // API Key
+  // 设置一个 API Key 来保护您的服务。
+  // 如果设置了此值，所有到 /v1/chat/completions 的请求都必须在 Authorization 头部中包含正确的 Bearer Token。
+  // 例如：Authorization: Bearer your_secret_key
+  // 如果留空 ("") 或未定义，则不需要 API Key，任何人都可以访问。
+  // 修改后需要重启 Python 服务器才能生效。
+  "api_key": "",
 
   // --- 高级设置 ---
 

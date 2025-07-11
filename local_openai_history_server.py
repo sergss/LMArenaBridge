@@ -471,6 +471,19 @@ def list_models():
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
+    # API Key 验证
+    api_key = CONFIG.get("api_key")
+    if api_key:
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            logger.warning("请求缺少有效的 Authorization Bearer 头部")
+            return jsonify({"error": {"message": "未提供 API Key。请在 Authorization 头部中以 'Bearer YOUR_KEY' 格式提供。", "type": "invalid_request_error", "code": "invalid_api_key"}}), 401
+        
+        provided_key = auth_header.split(' ')[1]
+        if provided_key != api_key:
+            logger.warning("提供的 API Key 不正确")
+            return jsonify({"error": {"message": "提供的 API Key 不正确。", "type": "invalid_request_error", "code": "invalid_api_key"}}), 401
+
     request_data = request.json
     if CONFIG.get("log_server_requests"):
         logger.info(f"--- 收到 OpenAI 请求 ---\n{json.dumps(request_data, indent=2, ensure_ascii=False)}")
@@ -733,7 +746,8 @@ if __name__ == '__main__':
         "log_server_requests": "服务器请求日志",
         "log_tampermonkey_debug": "油猴脚本调试日志",
         "enable_comprehensive_logging": "聚合日志",
-        "enable_anti_bot_hanging": "防人机检测挂机"
+        "enable_anti_bot_hanging": "防人机检测挂机",
+        "api_key": "API Key 保护"
     }
     
     logger.info("\n  当前配置:")
