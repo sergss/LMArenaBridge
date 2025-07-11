@@ -249,11 +249,11 @@ def report_result():
 def format_openai_chunk(content: str, model: str, request_id: str):
     return f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
 
-def format_openai_finish_chunk(model: str, request_id: str):
-    return f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\ndata: [DONE]\n\n"
+def format_openai_finish_chunk(model: str, request_id: str, reason: str = 'stop'):
+    return f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': reason}]})}\n\ndata: [DONE]\n\n"
 
-def format_openai_non_stream_response(content: str, model: str, request_id: str):
-    return {'id': request_id, 'object': 'chat.completion', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': content}, 'finish_reason': 'stop'}], 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}}
+def format_openai_non_stream_response(content: str, model: str, request_id: str, reason: str = 'stop'):
+    return {'id': request_id, 'object': 'chat.completion', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': content}, 'finish_reason': reason}], 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}}
 
 def _normalize_message_content(message: dict) -> dict:
     content = message.get("content")
@@ -264,8 +264,10 @@ def _normalize_message_content(message: dict) -> dict:
 def _openai_response_generator(task_id: str):
     text_pattern = re.compile(r'a0:"((?:\\.|[^"\\])*)"')
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
-    finish_pattern = re.compile(r'"finishReason"\s*:\s*"stop"')
+    finish_pattern = re.compile(r'"finishReason"\s*:\s*"(stop|content-filter)"')
     buffer = ""
+    RESULTS[task_id]['finish_reason'] = None
+
     while True:
         try:
             raw_chunk = RESULTS[task_id]['stream_queue'].get(timeout=60)
@@ -287,8 +289,12 @@ def _openai_response_generator(task_id: str):
                     if text_content: yield text_content
                 except json.JSONDecodeError: pass
                 buffer = buffer[match.end():]
-            if finish_pattern.search(raw_chunk):
-                logger.info(f"检测到任务 {task_id[:8]} 的 LMArena 流结束信号。")
+            
+            finish_match = finish_pattern.search(raw_chunk)
+            if finish_match:
+                reason = finish_match.group(1)
+                logger.info(f"检测到任务 {task_id[:8]} 的 LMArena 流结束信号，原因: {reason}。")
+                RESULTS[task_id]['finish_reason'] = reason
                 return
         except Empty:
             logger.warning(f"任务 {task_id[:8]} 的生成器超时。")
@@ -337,15 +343,29 @@ def chat_completions():
         def stream_response():
             for chunk in _openai_response_generator(task_id):
                 yield format_openai_chunk(chunk, model, request_id)
+
             if RESULTS[task_id].get('error'):
                 yield format_openai_chunk(f"[LMArena 自动化工具错误]: {RESULTS[task_id]['error']}", model, request_id)
-            yield format_openai_finish_chunk(model, request_id)
+                yield format_openai_finish_chunk(model, request_id)
+                return
+
+            finish_reason = RESULTS[task_id].get('finish_reason')
+            if finish_reason == 'content-filter':
+                yield format_openai_chunk("\n\n响应被终止，可能是上下文超限或者模型内部审查的原因", model, request_id)
+            
+            # 确保即使 finish_reason 为 None，也传递 'stop'
+            yield format_openai_finish_chunk(model, request_id, reason=finish_reason or 'stop')
         return Response(stream_response(), mimetype='text/event-stream')
     else:
         full_response_content = "".join(list(_openai_response_generator(task_id)))
         if RESULTS[task_id].get('error'):
             return jsonify({"error": {"message": f"[LMArena 自动化工具错误]: {RESULTS[task_id]['error']}", "type": "automator_error"}}), 500
-        return jsonify(format_openai_non_stream_response(full_response_content, model, request_id))
+        
+        finish_reason = RESULTS[task_id].get('finish_reason', 'stop')
+        if finish_reason == 'content-filter':
+            full_response_content += "\n\n响应被终止，可能是上下文超限或者模型内部审查的原因"
+            
+        return jsonify(format_openai_non_stream_response(full_response_content, model, request_id, reason=finish_reason))
 
 if __name__ == '__main__':
     _load_config()
