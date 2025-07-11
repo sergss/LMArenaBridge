@@ -318,6 +318,7 @@ def get_messages_job():
 @app.route('/events', methods=['GET'])
 def events():
     tab_id = request.args.get('tab_id')
+    is_hanging = request.args.get('is_hanging') == 'true'
     if not tab_id:
         return Response("tab_id is required", status=400)
 
@@ -325,12 +326,13 @@ def events():
         q = Queue()
         with SESSION_LOCK:
             if tab_id not in TAB_SESSIONS:
-                logger.info(f"新的SSE连接已建立: {tab_id[:8]}")
-                TAB_SESSIONS[tab_id] = {"status": "idle", "job": None, "task_id": None, "last_seen": time.time(), "sse_queue": q}
+                logger.info(f"新的SSE连接已建立: {tab_id[:8]} (报告挂机状态: {is_hanging})")
+                TAB_SESSIONS[tab_id] = {"status": "idle", "job": None, "task_id": None, "last_seen": time.time(), "sse_queue": q, "is_hanging_client": is_hanging}
             else:
                 logger.info(f"标签页 {tab_id[:8]} 重新建立了SSE连接。")
                 TAB_SESSIONS[tab_id]['sse_queue'] = q
                 TAB_SESSIONS[tab_id]['last_seen'] = time.time()
+                TAB_SESSIONS[tab_id]['is_hanging_client'] = is_hanging
             
             if TAB_SESSIONS[tab_id]['status'] == 'idle':
                 try:
@@ -461,9 +463,15 @@ def _load_config():
     try:
         with open('config.jsonc', 'r', encoding='utf-8') as f:
             CONFIG = json.loads(re.sub(r'/\*.*?\*/', '', re.sub(r'//.*', '', f.read()), flags=re.DOTALL))
+        logger.info("成功从 'config.jsonc' 加载配置。")
+        timeout_val = CONFIG.get("stream_response_timeout_seconds")
+        if timeout_val:
+            logger.info(f"配置的响应超时时间: {timeout_val} 秒。")
+        else:
+            logger.warning("'stream_response_timeout_seconds' 未在配置中找到，将使用代码中的默认值。")
     except Exception as e:
-        logging.error(f"无法加载 config.jsonc: {e}。将使用默认设置。")
-        CONFIG = {"enable_comprehensive_logging": False}
+        logging.error(f"无法加载或解析 'config.jsonc': {e}。将使用默认设置。")
+        CONFIG = {}
 
 @app.route('/v1/models', methods=['GET'])
 def list_models():
@@ -526,8 +534,14 @@ def chat_completions():
                 yield format_openai_chunk(chunk, model, request_id)
 
             if RESULTS[task_id].get('error'):
-                yield format_openai_chunk(f"[LMArena 自动化工具错误]: {RESULTS[task_id]['error']}", model, request_id)
-                yield format_openai_finish_chunk(model, request_id)
+                error_info = {
+                    "error": {
+                        "message": f"[LMArena 自动化工具错误]: {RESULTS[task_id]['error']}",
+                        "type": "automator_error"
+                    }
+                }
+                yield f"data: {json.dumps(error_info)}\n\n"
+                yield "data: [DONE]\n\n"
                 return
 
             finish_reason = RESULTS[task_id].get('finish_reason')
@@ -624,11 +638,21 @@ def cleanup_and_dispatch_thread():
             
             if enable_hanging and len(TAB_SESSIONS) >= 2:
                 if HANGING_TAB_ID is None or HANGING_TAB_ID not in TAB_SESSIONS:
-                    available_tabs = list(TAB_SESSIONS.keys())
-                    if available_tabs:
-                        HANGING_TAB_ID = random.choice(available_tabs)
+                    # 优先选择那些报告自己是挂机状态的标签页
+                    preferred_tabs = [tid for tid, s in TAB_SESSIONS.items() if s.get('is_hanging_client')]
+                    
+                    if preferred_tabs:
+                        HANGING_TAB_ID = random.choice(preferred_tabs)
+                        logger.info(f"调度器：已从 {len(preferred_tabs)} 个前挂机标签页中，重新选择 {HANGING_TAB_ID[:8]} 作为挂机池。")
+                    else:
+                        # 如果没有，则从所有可用标签页中随机选择
+                        available_tabs = list(TAB_SESSIONS.keys())
+                        if available_tabs:
+                            HANGING_TAB_ID = random.choice(available_tabs)
+                            logger.info(f"调度器：没有找到前挂机标签页，已随机选择新标签页 {HANGING_TAB_ID[:8]} 作为挂机池。")
+                    
+                    if HANGING_TAB_ID:
                         NEXT_HANGING_JOB_TIME = time.time()
-                        logger.info(f"调度器：已选择新标签页 {HANGING_TAB_ID[:8]} 作为防人机检测挂机池。")
             else:
                 if HANGING_TAB_ID is not None:
                      logger.info(f"调度器：因条件不满足（启用: {enable_hanging}, 标签页数: {len(TAB_SESSIONS)}），取消挂机模式。")

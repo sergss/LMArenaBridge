@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMArena Automator
 // @namespace    http://tampermonkey.net/
-// @version      7.1
+// @version      1.6.3
 // @description  Injects history with robust, buffered comprehensive logging and error reporting.
 // @author       Lianues
 // @updateURL    https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
@@ -180,12 +180,8 @@
                                 return originalFetch.apply(this, args); // 中断合并，执行原始请求
                             }
 
-                            let baseMessages;
-                            if (isHangingJob) {
-                                baseMessages = []; // 挂机任务，清空历史
-                            } else {
-                                baseMessages = bodyObject.messages.slice(0, -1); // 普通任务，保留历史
-                            }
+                            // 对于所有任务，我们都将完全替换历史记录，而不是追加。
+                            const baseMessages = [];
 
                             let parentMessageId = null;
                             const newMessages = message_templates.map(template => {
@@ -236,21 +232,34 @@
         (async () => {
             const reader = responseClone.body.getReader();
             const decoder = new TextDecoder();
-            while (true) {
-                try {
+            let status = 'completed'; // 默认任务状态为成功
+    
+            try {
+                while (true) {
                     const { done, value } = await reader.read();
                     if (done) {
-                        await fetch(`${SERVER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: 'completed' }) });
-                        sessionStorage.removeItem('current_task_id');
-                        break;
+                        break; // 流正常结束
                     }
-                    const chunk = decoder.decode(value, {stream: true});
+                    const chunk = decoder.decode(value, { stream: true });
+    
+                    // 尝试解析服务器可能发送的错误信息
+                    if (chunk.includes('"type": "automator_error"')) {
+                        console.error("[Automator] Server reported a stream error:", chunk);
+                        status = 'failed';
+                        break; // 检测到错误，中断循环
+                    }
+                    
+                    // 转发数据块到服务器
                     await fetch(`${SERVER_URL}/stream_chunk`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, chunk: chunk }) });
-                } catch (e) {
-                    console.error("Error in response stream handling:", e);
-                    sessionStorage.removeItem('current_task_id');
-                    break;
                 }
+            } catch (e) {
+                console.error("[Automator] Error while reading response stream:", e);
+                status = 'failed'; // 读取流时发生网络等错误
+            } finally {
+                // 无论成功或失败，都向服务器报告结果并清理会话
+                console.log(`[Automator] Task ${taskId.substring(0, 4)} finished with status: ${status}. Reporting result...`);
+                await fetch(`${SERVER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: status }) });
+                sessionStorage.removeItem('current_task_id');
             }
         })();
     }
@@ -278,7 +287,9 @@
 
     function connectEventSource() {
         console.log(`[Tab ${tabId.substring(0, 4)}] Connecting to SSE endpoint...`);
-        const eventSource = new EventSource(`${SERVER_URL}/events?tab_id=${tabId}`);
+        const isHanging = sessionStorage.getItem('lmarena_is_hanging') === 'true';
+        console.log(`[Tab ${tabId.substring(0, 4)}] Reporting hanging status to server: ${isHanging}`);
+        const eventSource = new EventSource(`${SERVER_URL}/events?tab_id=${tabId}&is_hanging=${isHanging}`);
 
         eventSource.onopen = () => {
             console.log(`[Tab ${tabId.substring(0, 4)}] SSE connection established.`);
@@ -304,6 +315,7 @@
         eventSource.addEventListener('set_hanging_status', (event) => {
             console.log(`[Tab ${tabId.substring(0, 4)}] Received hanging status update:`, event.data);
             const data = JSON.parse(event.data);
+            sessionStorage.setItem('lmarena_is_hanging', data.is_hanging); // 保存状态
             const hangingPrefix = "【挂机】";
             
             // 移除可能已存在的前缀，以避免重复添加
