@@ -421,6 +421,12 @@ def _openai_response_generator(task_id: str):
     text_pattern = re.compile(r'a0:"((?:\\.|[^"\\])*)"')
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
     finish_pattern = re.compile(r'"finishReason"\s*:\s*"(stop|content-filter)"')
+    # Cloudflare 检测特征
+    cloudflare_patterns = [
+        r'<title>Just a moment...</title>',
+        r'Enable JavaScript and cookies to continue'
+    ]
+    
     buffer = ""
     RESULTS[task_id]['finish_reason'] = None
     timeout = CONFIG.get("stream_response_timeout_seconds", 120)
@@ -429,6 +435,16 @@ def _openai_response_generator(task_id: str):
         try:
             raw_chunk = RESULTS[task_id]['stream_queue'].get(timeout=timeout)
             buffer += raw_chunk
+
+            # 1. 检测 Cloudflare 人机验证
+            for pattern in cloudflare_patterns:
+                if re.search(pattern, buffer, re.IGNORECASE):
+                    error_message = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
+                    logger.error(f"任务 {task_id[:8]} 检测到 Cloudflare 验证: {error_message}")
+                    RESULTS[task_id]['error'] = error_message
+                    return
+
+            # 2. 检测 LMArena 返回的错误
             error_match = error_pattern.search(buffer)
             if error_match:
                 try:
@@ -438,6 +454,8 @@ def _openai_response_generator(task_id: str):
                     RESULTS[task_id]['error'] = str(error_message)
                     return
                 except json.JSONDecodeError: pass
+
+            # 3. 提取文本内容
             while True:
                 match = text_pattern.search(buffer)
                 if not match: break
