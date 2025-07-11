@@ -4,7 +4,10 @@
 // @version      7.1
 // @description  Injects history with robust, buffered comprehensive logging and error reporting.
 // @author       Lianues
+// @updateURL    https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
+// @downloadURL  https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
 // @match        https://lmarena.ai/c/*
+// @match        https://canary.lmarena.ai/c/*
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==

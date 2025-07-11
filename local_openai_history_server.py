@@ -12,6 +12,12 @@ import time
 import json
 import re
 from datetime import datetime
+import requests
+from packaging.version import parse as parse_version
+import zipfile
+import io
+import sys
+import subprocess
 
 # --- 全局配置 ---
 CONFIG = {}
@@ -164,6 +170,88 @@ def compare_and_update_models(new_models_list, models_path):
         logger.error(f"写入 '{models_path}' 文件时出错: {e}")
     
     logger.info("--- 检查与更新完毕 ---")
+
+
+# --- 更新检查 ---
+GITHUB_REPO = "Lianues/LMArenaBridge"
+
+def download_and_extract_update(version):
+    """下载并解压最新版本到临时文件夹。"""
+    update_dir = "update_temp"
+    if not os.path.exists(update_dir):
+        os.makedirs(update_dir)
+
+    try:
+        zip_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+        logger.info(f"正在从 {zip_url} 下载新版本...")
+        response = requests.get(zip_url, timeout=60)
+        response.raise_for_status()
+
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            # 解压所有文件到临时目录
+            z.extractall(update_dir)
+        
+        logger.info(f"新版本已成功下载并解压到 '{update_dir}' 文件夹。")
+        return True
+    except requests.RequestException as e:
+        logger.error(f"下载更新失败: {e}")
+    except zipfile.BadZipFile:
+        logger.error("下载的文件不是一个有效的zip压缩包。")
+    except Exception as e:
+        logger.error(f"解压更新时发生未知错误: {e}")
+    
+    return False
+
+def check_for_updates():
+    """从 GitHub 检查新版本。"""
+    if not CONFIG.get("enable_auto_update", True):
+        logger.info("自动更新已禁用，跳过检查。")
+        return
+
+    current_version = CONFIG.get("version", "0.0.0")
+    logger.info(f"当前版本: {current_version}。正在从 GitHub 检查更新...")
+
+    try:
+        config_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/config.jsonc"
+        response = requests.get(config_url, timeout=10)
+        response.raise_for_status()
+
+        # 移除注释以解析 JSON
+        jsonc_content = response.text
+        json_content = re.sub(r'//.*', '', jsonc_content)
+        json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
+        remote_config = json.loads(json_content)
+        
+        remote_version_str = remote_config.get("version")
+        if not remote_version_str:
+            logger.warning("远程配置文件中未找到版本号，跳过更新检查。")
+            return
+
+        if parse_version(remote_version_str) > parse_version(current_version):
+            logger.info("="*60)
+            logger.info(f"🎉 发现新版本! 🎉")
+            logger.info(f"  - 当前版本: {current_version}")
+            logger.info(f"  - 最新版本: {remote_version_str}")
+            if download_and_extract_update(remote_version_str):
+                logger.info("准备应用更新。服务器将在5秒后关闭并启动更新脚本。")
+                time.sleep(5)
+                # 启动更新脚本并分离
+                update_script_path = os.path.join("modules", "update_script.py")
+                subprocess.Popen([sys.executable, update_script_path])
+                # 干净地退出当前程序
+                sys.exit(0)
+            else:
+                logger.error(f"自动更新失败。请访问 https://github.com/{GITHUB_REPO}/releases/latest 手动下载。")
+            logger.info("="*60)
+        else:
+            logger.info("您的程序已是最新版本。")
+
+    except requests.RequestException as e:
+        logger.error(f"检查更新失败: {e}")
+    except json.JSONDecodeError:
+        logger.error("解析远程配置文件失败。")
+    except Exception as e:
+        logger.error(f"检查更新时发生未知错误: {e}")
 
 
 # --- API 端点 ---
@@ -379,12 +467,17 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s', handlers=[logging.StreamHandler()])
     
     load_model_map()
+    
+    # 检查更新
+    check_for_updates()
+
     logger.info("="*60)
     logger.info("  🚀 LMArena 自动化工具 - v12.2 (中文本地化)")
     logger.info(f"  - 监听地址: http://127.0.0.1:5102")
     
     # 使用一个字典来映射配置键和它们的中文名称
     config_keys_in_chinese = {
+        "enable_auto_update": "自动更新",
         "bypass_enabled": "Bypass 模式",
         "tavern_mode_enabled": "酒馆模式",
         "log_server_requests": "服务器请求日志",
