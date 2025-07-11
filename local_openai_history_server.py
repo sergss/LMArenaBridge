@@ -309,7 +309,10 @@ def get_messages_job():
         if session and session.get('status') == 'busy' and session.get('job'):
             job_data = session['job'].get('messages_job')
             if job_data:
-                logger.info(f"提供 messages_job 给标签页 {tab_id[:8]} (任务 {session['task_id'][:8]})")
+                # Check if logging for hanging tasks is enabled
+                is_hanging = session.get('job', {}).get('is_hanging_job', False)
+                if not is_hanging or CONFIG.get("log_hanging_pool_activity", True):
+                    logger.info(f"提供 messages_job 给标签页 {tab_id[:8]} (任务 {session['task_id'][:8]})")
                 session['job']['messages_job'] = None
                 return jsonify({"status": "success", "job": job_data})
             
@@ -334,6 +337,11 @@ def events():
                 TAB_SESSIONS[tab_id]['last_seen'] = time.time()
                 TAB_SESSIONS[tab_id]['is_hanging_client'] = is_hanging
             
+            # 立即同步挂机状态，确保客户端状态与服务器一致
+            is_currently_hanging = (tab_id == HANGING_TAB_ID)
+            q.put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': is_currently_hanging})}\n\n")
+            logger.info(f"标签页 {tab_id[:8]} SSE连接时同步挂机状态: {is_currently_hanging}")
+
             if TAB_SESSIONS[tab_id]['status'] == 'idle':
                 try:
                     job_package = PENDING_JOBS.get_nowait()
@@ -385,12 +393,18 @@ def report_result():
 
     if task_id in RESULTS:
         RESULTS[task_id]['status'] = data.get('status', 'completed')
-        logger.info(f"任务 {task_id[:8]} (来自标签页 {tab_id[:8]}) 已被客户端报告为完成。")
+        
+        is_hanging = task_id.startswith("hanging-")
+        log_activity = CONFIG.get("log_hanging_pool_activity", True)
+
+        if not is_hanging or log_activity:
+            logger.info(f"任务 {task_id[:8]} (来自标签页 {tab_id[:8]}) 已被客户端报告为完成。")
         
         with SESSION_LOCK:
             session = TAB_SESSIONS.get(tab_id)
             if session and session.get('task_id') == task_id:
-                logger.info(f"标签页 {tab_id[:8]} 已完成任务，状态重置为空闲。")
+                if not is_hanging or log_activity:
+                    logger.info(f"标签页 {tab_id[:8]} 已完成任务，状态重置为空闲。")
                 session['status'] = 'idle'
                 session['job'] = None
                 session['task_id'] = None
@@ -708,7 +722,8 @@ def cleanup_and_dispatch_thread():
                 has_pending_hanging_job = any(job.get('is_hanging_job') for job in list(PENDING_JOBS.queue))
                 
                 if current_time >= NEXT_HANGING_JOB_TIME and not has_pending_hanging_job:
-                    logger.info(f"调度器：创建新的挂机任务并放入队列。")
+                    if CONFIG.get("log_hanging_pool_activity", True):
+                        logger.info(f"调度器：创建新的挂机任务并放入队列。")
                     hanging_job_package = create_hanging_job_package()
                     PENDING_JOBS.put(hanging_job_package)
                     NEXT_HANGING_JOB_TIME = current_time + hanging_interval
@@ -755,7 +770,11 @@ def dispatch_job(tab_id, session, job_package):
         try:
             if session['sse_queue']:
                 session['sse_queue'].put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
-                logger.info(f"调度器：将任务 {job_package['task_id'][:8]} 分配给了标签页 {tab_id[:8]}")
+                
+                # Check if logging for hanging tasks is enabled
+                is_hanging = job_package.get("is_hanging_job", False)
+                if not is_hanging or CONFIG.get("log_hanging_pool_activity", True):
+                    logger.info(f"调度器：将任务 {job_package['task_id'][:8]} 分配给了标签页 {tab_id[:8]}")
             else:
                 raise Exception("SSE Queue is None")
         except Exception as e:
@@ -799,6 +818,7 @@ if __name__ == '__main__':
         "log_tampermonkey_debug": "油猴脚本调试日志",
         "enable_comprehensive_logging": "聚合日志",
         "enable_anti_bot_hanging": "防人机检测挂机",
+        "log_hanging_pool_activity": "挂机池活动日志",
         "api_key": "API Key 保护"
     }
     

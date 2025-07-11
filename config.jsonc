@@ -65,6 +65,12 @@
   // 默认 120 秒（2 分钟）。
   "hanging_interval_seconds": 45,
 
+  // 开关：挂机池活动日志
+  // 设置为 true，服务器将打印挂机任务的创建、分配和完成等详细日志。
+  // 设置为 false，将隐藏这些常规的挂机活动日志，以保持控制台清洁（错误日志仍会显示）。
+  // 默认为 true。
+  "log_hanging_pool_activity": true,
+
   // --- 安全设置 ---
 
   // API Key
