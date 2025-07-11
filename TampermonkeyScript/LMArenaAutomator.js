@@ -153,9 +153,12 @@
 
                 const lastUserMessage = (bodyObject.messages || []).slice().reverse().find(m => m.role === 'user');
 
-                if (lastUserMessage && lastUserMessage.content.startsWith('[这条消息仅起占位，请以外部应用中显示的内容为准：/')) {
+                const triggerPrefix = '[这条消息仅起占位，请以外部应用中显示的内容为准：/';
+                const hangingTrigger = '[防人机检测挂机任务]';
+
+                // 检查是否是普通触发或挂机触发
+                if (lastUserMessage && (lastUserMessage.content.startsWith(triggerPrefix) || lastUserMessage.content.startsWith(hangingTrigger))) {
                     console.log('LMArena Automator: Trigger detected. Performing stateful merge...');
-                    // 无条件记录调试信息，由日志总开关决定是否发送
                     console.log('Automator Debug: Original body:', bodyObject);
                     
                     try {
@@ -163,15 +166,33 @@
                         const data = await serverResponse.json();
 
                         if (data.status === 'success' && data.job) {
-                            const { message_templates, target_model_id, task_id } = data.job; // 拿到 task_id
-                            sessionStorage.setItem('current_task_id', task_id); // 存储 task_id
-                            const lastOriginalMessage = bodyObject.messages[bodyObject.messages.length - 1];
-                            const { evaluationId, evaluationSessionId } = lastOriginalMessage;
+                            const { message_templates, target_model_id, task_id } = data.job;
+                            sessionStorage.setItem('current_task_id', task_id);
+
+                            const isHangingJob = task_id.startsWith('hanging-');
+                            
+                            // 关键修复：无论是否为挂机任务，都先从原始消息中获取会话ID
+                            const originalLastMsg = bodyObject.messages[bodyObject.messages.length - 1];
+                            const { evaluationId, evaluationSessionId } = originalLastMsg || {};
+
+                            if (!evaluationSessionId) {
+                                console.error("Automator Critical Error: Could not extract evaluationSessionId. Aborting merge.");
+                                return originalFetch.apply(this, args); // 中断合并，执行原始请求
+                            }
+
+                            let baseMessages;
+                            if (isHangingJob) {
+                                baseMessages = []; // 挂机任务，清空历史
+                            } else {
+                                baseMessages = bodyObject.messages.slice(0, -1); // 普通任务，保留历史
+                            }
 
                             let parentMessageId = null;
                             const newMessages = message_templates.map(template => {
                                 const newMsg = {
-                                    ...template, id: crypto.randomUUID(), evaluationId, evaluationSessionId,
+                                    ...template, id: crypto.randomUUID(),
+                                    evaluationId,
+                                    evaluationSessionId, // 确保此ID被正确传递
                                     parentMessageIds: parentMessageId ? [parentMessageId] : [],
                                     experimental_attachments: [], failureReason: null, metadata: null,
                                     participantPosition: "a", createdAt: new Date().toISOString(),
@@ -182,8 +203,9 @@
                                 return newMsg;
                             });
 
-                            bodyObject.messages = newMessages;
+                            bodyObject.messages = baseMessages.concat(newMessages);
                             bodyObject.modelAId = target_model_id;
+                            
                             const finalUserMessage = newMessages.slice().reverse().find(m => m.role === 'user');
                             const finalAssistantMessage = newMessages.slice().reverse().find(m => m.role === 'assistant');
                             if(finalUserMessage) bodyObject.userMessageId = finalUserMessage.id;
@@ -195,6 +217,8 @@
                             const response = await originalFetch.apply(this, [url, newOptions]);
                             handleResponseStream(response);
                             return response;
+                        } else {
+                             console.warn("Automator: Trigger detected but no job received from server. Proceeding with original request.");
                         }
                     } catch (e) {
                         console.error("LMArena Automator: Failed to perform stateful merge:", e);
@@ -264,7 +288,6 @@
             console.log(`[Tab ${tabId.substring(0, 4)}] New job received via SSE:`, event.data);
             const job = JSON.parse(event.data);
             
-            // Ensure this tab is not already busy
             if (sessionStorage.getItem('current_task_id')) {
                 console.warn(`[Tab ${tabId.substring(0, 4)}] Received a job but is already busy. Ignoring.`);
                 return;
@@ -275,6 +298,21 @@
                 await typeAndSubmitPrompt(job.prompt);
             } else if (job.type === 'messages') {
                 console.log(`[Tab ${tabId.substring(0, 4)}] Handling 'messages' job. Waiting for trigger...`);
+            }
+        });
+
+        eventSource.addEventListener('set_hanging_status', (event) => {
+            console.log(`[Tab ${tabId.substring(0, 4)}] Received hanging status update:`, event.data);
+            const data = JSON.parse(event.data);
+            const hangingPrefix = "【挂机】";
+            
+            // 移除可能已存在的前缀，以避免重复添加
+            if (document.title.startsWith(hangingPrefix)) {
+                document.title = document.title.substring(hangingPrefix.length);
+            }
+
+            if (data.is_hanging) {
+                document.title = hangingPrefix + document.title;
             }
         });
         

@@ -11,6 +11,7 @@ import threading
 import time
 import json
 import re
+import random
 from datetime import datetime
 import requests
 from packaging.version import parse as parse_version
@@ -34,6 +35,9 @@ PENDING_JOBS = Queue()
 TAB_SESSIONS = {}  # { "tab_id": {"status": "idle"|"busy", "job": {}, "last_seen": timestamp, "task_id": "...", "sse_queue": Queue()} }
 SESSION_LOCK = threading.Lock()
 RESULTS = {}
+# 防人机检测挂机池
+HANGING_TAB_ID = None
+NEXT_HANGING_JOB_TIME = 0
 
 # --- 模型映射 ---
 MODEL_NAME_TO_ID_MAP = {}
@@ -417,10 +421,11 @@ def _openai_response_generator(task_id: str):
     finish_pattern = re.compile(r'"finishReason"\s*:\s*"(stop|content-filter)"')
     buffer = ""
     RESULTS[task_id]['finish_reason'] = None
+    timeout = CONFIG.get("stream_response_timeout_seconds", 120)
 
     while True:
         try:
-            raw_chunk = RESULTS[task_id]['stream_queue'].get(timeout=60)
+            raw_chunk = RESULTS[task_id]['stream_queue'].get(timeout=timeout)
             buffer += raw_chunk
             error_match = error_pattern.search(buffer)
             if error_match:
@@ -448,7 +453,7 @@ def _openai_response_generator(task_id: str):
                 return
         except Empty:
             logger.warning(f"任务 {task_id[:8]} 的生成器超时。")
-            RESULTS[task_id]['error'] = '流式响应在60秒后超时。'
+            RESULTS[task_id]['error'] = f'流式响应在{timeout}秒后超时。'
             return
 
 def _load_config():
@@ -529,54 +534,173 @@ def chat_completions():
             
         return jsonify(format_openai_non_stream_response(full_response_content, model, request_id, reason=finish_reason))
 
+def create_hanging_job_package():
+    """
+    创建一个完全模拟 OpenAI 请求的挂机任务包。
+    """
+    # 模拟一个外部应用发来的请求体
+    request_data = {
+        "model": "claude-3-5-sonnet-20241022", # 或者任何一个有效的默认模型
+        "messages": [{"role": "user", "content": "你好"}]
+    }
+
+    # 使用与 /v1/chat/completions 端点完全相同的逻辑来创建任务
+    messages_job = convert_openai_to_lmarena_templates(request_data)
+    task_id = f"hanging-{uuid.uuid4()}"
+    messages_job['task_id'] = task_id
+    
+    prompt_job = {
+        "task_id": task_id,
+        "prompt": f"[防人机检测挂机任务]"}
+
+    job_package = {
+        "task_id": task_id,
+        "messages_job": messages_job,
+        "prompt_job": prompt_job,
+        "is_hanging_job": True  # 标记为挂机任务
+    }
+
+    # 注册任务以跟踪其结果
+    RESULTS[task_id] = {"status": "pending", "stream_queue": Queue(), "error": None}
+    
+    return job_package
+
 def cleanup_and_dispatch_thread():
     """
-    一个后台线程，通过主动ping来清理僵尸连接，并调度待处理的任务。
+    一个后台线程，负责清理僵尸连接、调度待处理任务以及管理防人机检测挂机池。
     """
+    global HANGING_TAB_ID, NEXT_HANGING_JOB_TIME
+
     while True:
         time.sleep(2) # Run every 2 seconds for high responsiveness
+        
+        # 读取配置，确保是最新的
+        enable_hanging = CONFIG.get("enable_anti_bot_hanging", False)
+        hanging_interval = CONFIG.get("hanging_interval_seconds", 120)
+
         with SESSION_LOCK:
             # --- 1. Active Ping & Cleanup Phase ---
             zombie_tabs = []
-            sessions_snapshot = list(TAB_SESSIONS.items())
-            for tab_id, session in sessions_snapshot:
+            active_sessions = list(TAB_SESSIONS.items())
+            
+            for tab_id, session in active_sessions:
                 try:
-                    # Try to send a harmless comment to the queue to check the connection
-                    session['sse_queue'].put_nowait(": ping\n\n")
-                except (AttributeError, Exception): # Catches if queue is None or put fails
+                    if session['sse_queue']:
+                        session['sse_queue'].put_nowait(": ping\n\n")
+                except (AttributeError, Exception):
                     zombie_tabs.append(tab_id)
 
             for tab_id in zombie_tabs:
                 logger.warning(f"调度器：通过Ping检测到僵尸会话: {tab_id[:8]}，正在清理。")
                 session = TAB_SESSIONS.pop(tab_id, None)
-                if session and session.get('status') == 'busy' and session.get('job'):
-                    requeued_job = session['job']
-                    PENDING_JOBS.put(requeued_job)
-                    logger.warning(f"调度器：来自僵尸会话的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
-
-            # --- 2. Dispatch Phase ---
-            if not PENDING_JOBS.empty():
-                idle_sessions = {tid: s for tid, s in TAB_SESSIONS.items() if s.get('status') == 'idle'}
                 
-                if idle_sessions:
-                    job_package = PENDING_JOBS.get()
-                    idle_tab_id, session = idle_sessions.popitem()
+                if tab_id == HANGING_TAB_ID:
+                    logger.info("调度器：挂机标签页已断开，将重新选择。")
+                    HANGING_TAB_ID = None
+                
+                if session and session.get('status') == 'busy' and session.get('job'):
+                    if not session['job'].get("is_hanging_job"):
+                        requeued_job = session['job']
+                        PENDING_JOBS.put(requeued_job)
+                        logger.warning(f"调度器：来自僵尸会话的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
+                    else:
+                        logger.info(f"调度器：丢弃来自僵尸会话的挂机任务 {session['task_id'][:8]}。")
 
-                    session['status'] = 'busy'
-                    session['job'] = job_package
-                    session['task_id'] = job_package['task_id']
-                    session['last_seen'] = time.time()
+            # --- 2. Anti-Bot Hanging Management Phase ---
+            previous_hanging_id = HANGING_TAB_ID
+            
+            if enable_hanging and len(TAB_SESSIONS) >= 2:
+                if HANGING_TAB_ID is None or HANGING_TAB_ID not in TAB_SESSIONS:
+                    available_tabs = list(TAB_SESSIONS.keys())
+                    if available_tabs:
+                        HANGING_TAB_ID = random.choice(available_tabs)
+                        NEXT_HANGING_JOB_TIME = time.time()
+                        logger.info(f"调度器：已选择新标签页 {HANGING_TAB_ID[:8]} 作为防人机检测挂机池。")
+            else:
+                if HANGING_TAB_ID is not None:
+                     logger.info(f"调度器：因条件不满足（启用: {enable_hanging}, 标签页数: {len(TAB_SESSIONS)}），取消挂机模式。")
+                HANGING_TAB_ID = None
 
-                    prompt_job_data = job_package.get('prompt_job')
-                    if prompt_job_data:
-                        prompt_job_data['type'] = 'prompt'
-                        try:
-                            session['sse_queue'].put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
-                            logger.info(f"调度器：将待处理任务 {job_package['task_id'][:8]} 分配给了空闲的标签页 {idle_tab_id[:8]}")
-                        except Exception as e:
-                            logger.error(f"调度器：在重新分配任务时连接失效: {e}")
-                            PENDING_JOBS.put(job_package)
-                            TAB_SESSIONS.pop(idle_tab_id, None)
+            # --- 状态变更通知 ---
+            if previous_hanging_id != HANGING_TAB_ID:
+                # 通知旧的挂机标签页取消状态
+                if previous_hanging_id and previous_hanging_id in TAB_SESSIONS:
+                    try:
+                        TAB_SESSIONS[previous_hanging_id]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': False})}\n\n")
+                        logger.info(f"通知标签页 {previous_hanging_id[:8]} 已取消挂机状态。")
+                    except Exception: pass
+                # 通知新的挂机标签页设置状态
+                if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS:
+                    try:
+                        TAB_SESSIONS[HANGING_TAB_ID]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': True})}\n\n")
+                        logger.info(f"通知标签页 {HANGING_TAB_ID[:8]} 已设为挂机状态。")
+                    except Exception: pass
+
+
+            # --- 3. Hanging Job Creation Phase ---
+            if enable_hanging and HANGING_TAB_ID:
+                current_time = time.time()
+                has_pending_hanging_job = any(job.get('is_hanging_job') for job in list(PENDING_JOBS.queue))
+                
+                if current_time >= NEXT_HANGING_JOB_TIME and not has_pending_hanging_job:
+                    logger.info(f"调度器：创建新的挂机任务并放入队列。")
+                    hanging_job_package = create_hanging_job_package()
+                    PENDING_JOBS.put(hanging_job_package)
+                    NEXT_HANGING_JOB_TIME = current_time + hanging_interval
+
+            # --- 4. Dispatch Phase ---
+            if not PENDING_JOBS.empty():
+                job_package = PENDING_JOBS.queue[0]
+                is_hanging = job_package.get("is_hanging_job", False)
+                
+                target_session_id = None
+                
+                if is_hanging:
+                    if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                        target_session_id = HANGING_TAB_ID
+                else:
+                    idle_non_hanging_sessions = {
+                        tid: s for tid, s in TAB_SESSIONS.items()
+                        if s.get('status') == 'idle' and tid != HANGING_TAB_ID
+                    }
+                    if idle_non_hanging_sessions:
+                        target_session_id = list(idle_non_hanging_sessions.keys())[0]
+                    elif HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                        target_session_id = HANGING_TAB_ID
+
+                if target_session_id:
+                    job_to_dispatch = PENDING_JOBS.get()
+                    session = TAB_SESSIONS[target_session_id]
+                    dispatch_job(target_session_id, session, job_to_dispatch)
+                    if not is_hanging and target_session_id == HANGING_TAB_ID:
+                        NEXT_HANGING_JOB_TIME = time.time() + hanging_interval
+                        logger.info(f"挂机标签页被用于执行普通任务，下一次挂机任务推迟。")
+
+def dispatch_job(tab_id, session, job_package):
+    """辅助函数，用于将任务发送到指定的标签页会话。"""
+    global HANGING_TAB_ID
+    session['status'] = 'busy'
+    session['job'] = job_package
+    session['task_id'] = job_package['task_id']
+    session['last_seen'] = time.time()
+
+    prompt_job_data = job_package.get('prompt_job')
+    if prompt_job_data:
+        prompt_job_data['type'] = 'prompt'
+        try:
+            if session['sse_queue']:
+                session['sse_queue'].put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
+                logger.info(f"调度器：将任务 {job_package['task_id'][:8]} 分配给了标签页 {tab_id[:8]}")
+            else:
+                raise Exception("SSE Queue is None")
+        except Exception as e:
+            logger.error(f"调度器：在分配任务给 {tab_id[:8]} 时连接失效: {e}")
+            # 如果是普通任务，重新排队
+            if not job_package.get("is_hanging_job"):
+                PENDING_JOBS.put(job_package)
+            TAB_SESSIONS.pop(tab_id, None)
+            if tab_id == HANGING_TAB_ID:
+                HANGING_TAB_ID = None
 
 if __name__ == '__main__':
     _load_config()
@@ -608,7 +732,8 @@ if __name__ == '__main__':
         "tavern_mode_enabled": "酒馆模式",
         "log_server_requests": "服务器请求日志",
         "log_tampermonkey_debug": "油猴脚本调试日志",
-        "enable_comprehensive_logging": "聚合日志"
+        "enable_comprehensive_logging": "聚合日志",
+        "enable_anti_bot_hanging": "防人机检测挂机"
     }
     
     logger.info("\n  当前配置:")
