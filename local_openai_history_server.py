@@ -30,8 +30,9 @@ werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.disabled = True
 
 # --- 数据存储 ---
-MESSAGES_JOBS = Queue()
-PROMPT_JOBS = Queue()
+PENDING_JOBS = Queue()
+TAB_SESSIONS = {}  # { "tab_id": {"status": "idle"|"busy", "job": {}, "last_seen": timestamp, "task_id": "...", "sse_queue": Queue()} }
+SESSION_LOCK = threading.Lock()
 RESULTS = {}
 
 # --- 模型映射 ---
@@ -61,8 +62,6 @@ def extract_models_from_html(html_content):
             
             full_payload = match.group(1)
             
-            # 载荷可能包含由 \n 分隔的多个部分。我们只关心第一个主要的数据块。
-            # 我们按字面上的 '\\n' 分割
             payload_string = full_payload.split('\\n')[0]
             
             json_start_index = payload_string.find(':')
@@ -70,21 +69,17 @@ def extract_models_from_html(html_content):
                 continue
             
             json_string_with_escapes = payload_string[json_start_index + 1:]
-            # 移除转义的引号
             json_string = json_string_with_escapes.replace('\\"', '"')
             
             try:
                 data = json.loads(json_string)
                 
-                # 递归查找 initialState 键
                 def find_initial_state(obj):
                     if isinstance(obj, dict):
                         for key, value in obj.items():
                             if key == 'initialState' and isinstance(value, list):
-                                # 确保列表不为空且包含模型字典
                                 if value and isinstance(value[0], dict) and 'publicName' in value[0]:
                                     return value
-                            # 即使找到一个，也要继续搜索，以防有嵌套
                             result = find_initial_state(value)
                             if result is not None:
                                 return result
@@ -157,14 +152,12 @@ def compare_and_update_models(new_models_list, models_path):
         logger.info("--- 检查完毕 ---")
         return
 
-    # 更新文件
     logger.info("\n结论: 检测到模型变更，正在更新 'models.json'...")
     updated_model_map = {model['publicName']: model.get('id') for model in new_models_list if 'publicName' in model and 'id' in model}
     try:
         with open(models_path, 'w', encoding='utf-8') as f:
             json.dump(updated_model_map, f, indent=4, ensure_ascii=False)
         logger.info(f"'{models_path}' 已成功更新，包含 {len(updated_model_map)} 个模型。")
-        # 更新后重新加载到内存中
         load_model_map()
     except IOError as e:
         logger.error(f"写入 '{models_path}' 文件时出错: {e}")
@@ -188,7 +181,6 @@ def download_and_extract_update(version):
         response.raise_for_status()
 
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            # 解压所有文件到临时目录
             z.extractall(update_dir)
         
         logger.info(f"新版本已成功下载并解压到 '{update_dir}' 文件夹。")
@@ -216,7 +208,6 @@ def check_for_updates():
         response = requests.get(config_url, timeout=10)
         response.raise_for_status()
 
-        # 移除注释以解析 JSON
         jsonc_content = response.text
         json_content = re.sub(r'//.*', '', jsonc_content)
         json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
@@ -235,10 +226,8 @@ def check_for_updates():
             if download_and_extract_update(remote_version_str):
                 logger.info("准备应用更新。服务器将在5秒后关闭并启动更新脚本。")
                 time.sleep(5)
-                # 启动更新脚本并分离
                 update_script_path = os.path.join("modules", "update_script.py")
                 subprocess.Popen([sys.executable, update_script_path])
-                # 干净地退出当前程序
                 sys.exit(0)
             else:
                 logger.error(f"自动更新失败。请访问 https://github.com/{GITHUB_REPO}/releases/latest 手动下载。")
@@ -293,7 +282,7 @@ def log_from_client():
         logger.info(f"[油猴脚本] {log_data.get('level', 'INFO')}: {log_data['message']}")
     return jsonify({"status": "logged"})
 
-# --- 核心逻辑 (无变化) ---
+# --- 核心逻辑 ---
 def convert_openai_to_lmarena_templates(openai_data: dict) -> dict:
     model_name = openai_data.get("model", "claude-3-5-sonnet-20241022")
     target_model_id = MODEL_NAME_TO_ID_MAP.get(model_name, DEFAULT_MODEL_ID)
@@ -307,32 +296,105 @@ def convert_openai_to_lmarena_templates(openai_data: dict) -> dict:
 
 @app.route('/get_messages_job', methods=['GET'])
 def get_messages_job():
-    try: return jsonify({"status": "success", "job": MESSAGES_JOBS.get_nowait()})
-    except Empty: return jsonify({"status": "empty"})
+    tab_id = request.args.get('tab_id')
+    if not tab_id:
+        return jsonify({"status": "error", "message": "tab_id is required"}), 400
+    
+    with SESSION_LOCK:
+        session = TAB_SESSIONS.get(tab_id)
+        if session and session.get('status') == 'busy' and session.get('job'):
+            job_data = session['job'].get('messages_job')
+            if job_data:
+                logger.info(f"提供 messages_job 给标签页 {tab_id[:8]} (任务 {session['task_id'][:8]})")
+                session['job']['messages_job'] = None
+                return jsonify({"status": "success", "job": job_data})
+            
+    return jsonify({"status": "empty"})
 
-@app.route('/get_prompt_job', methods=['GET'])
-def get_prompt_job():
-    try: return jsonify({"status": "success", "job": PROMPT_JOBS.get_nowait()})
-    except Empty: return jsonify({"status": "empty"})
+@app.route('/events', methods=['GET'])
+def events():
+    tab_id = request.args.get('tab_id')
+    if not tab_id:
+        return Response("tab_id is required", status=400)
+
+    def stream():
+        q = Queue()
+        with SESSION_LOCK:
+            if tab_id not in TAB_SESSIONS:
+                logger.info(f"新的SSE连接已建立: {tab_id[:8]}")
+                TAB_SESSIONS[tab_id] = {"status": "idle", "job": None, "task_id": None, "last_seen": time.time(), "sse_queue": q}
+            else:
+                logger.info(f"标签页 {tab_id[:8]} 重新建立了SSE连接。")
+                TAB_SESSIONS[tab_id]['sse_queue'] = q
+                TAB_SESSIONS[tab_id]['last_seen'] = time.time()
+            
+            if TAB_SESSIONS[tab_id]['status'] == 'idle':
+                try:
+                    job_package = PENDING_JOBS.get_nowait()
+                    task_id = job_package['task_id']
+                    TAB_SESSIONS[tab_id]['job'] = job_package
+                    TAB_SESSIONS[tab_id]['status'] = 'busy'
+                    TAB_SESSIONS[tab_id]['task_id'] = task_id
+                    
+                    prompt_job_data = job_package.get('prompt_job')
+                    if prompt_job_data:
+                        prompt_job_data['type'] = 'prompt'
+                        logger.info(f"通过新建立的SSE连接，将待处理任务 {task_id[:8]} 推送给标签页 {tab_id[:8]}")
+                        q.put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
+
+                except Empty:
+                    pass
+
+        try:
+            while True:
+                message = q.get()
+                yield message
+        except GeneratorExit:
+            logger.info(f"SSE连接已由客户端关闭: {tab_id[:8]}")
+            with SESSION_LOCK:
+                if tab_id in TAB_SESSIONS:
+                    TAB_SESSIONS[tab_id]['sse_queue'] = None
+
+    return Response(stream(), mimetype='text/event-stream')
 
 @app.route('/stream_chunk', methods=['POST'])
 def stream_chunk():
     data = request.json
     task_id = data.get('task_id')
+    tab_id = data.get('tab_id')
     if task_id in RESULTS:
         RESULTS[task_id]['stream_queue'].put(data.get('chunk'))
         return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
+    logger.warning(f"从标签页 {tab_id[:8] if tab_id else 'N/A'} 收到了未知任务 {task_id[:8] if task_id else 'N/A'} 的数据块。")
+    return jsonify({"status": "error", "message": "Task ID not found"}), 404
 
 @app.route('/report_result', methods=['POST'])
 def report_result():
     data = request.json
     task_id = data.get('task_id')
+    tab_id = data.get('tab_id')
+    
+    if not tab_id:
+        return jsonify({"status": "error", "message": "tab_id is required"}), 400
+
     if task_id in RESULTS:
         RESULTS[task_id]['status'] = data.get('status', 'completed')
-        logger.info(f"任务 {task_id[:8]} 已被客户端报告为完成。")
+        logger.info(f"任务 {task_id[:8]} (来自标签页 {tab_id[:8]}) 已被客户端报告为完成。")
+        
+        with SESSION_LOCK:
+            session = TAB_SESSIONS.get(tab_id)
+            if session and session.get('task_id') == task_id:
+                logger.info(f"标签页 {tab_id[:8]} 已完成任务，状态重置为空闲。")
+                session['status'] = 'idle'
+                session['job'] = None
+                session['task_id'] = None
+            else:
+                logger.warning(f"报告完成时，标签页 {tab_id[:8]} 的会话状态异常或任务ID不匹配。")
+
         return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
+        
+    logger.warning(f"从标签页 {tab_id[:8]} 收到了未知任务 {task_id[:8] if task_id else 'N/A'} 的完成报告。")
+    return jsonify({"status": "error", "message": "Task ID not found"}), 404
 
 def format_openai_chunk(content: str, model: str, request_id: str):
     return f"data: {json.dumps({'id': request_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
@@ -419,11 +481,24 @@ def chat_completions():
         final_messages.extend(other_messages)
         request_data["messages"] = final_messages
     messages_job = convert_openai_to_lmarena_templates(request_data)
-    MESSAGES_JOBS.put(messages_job)
     task_id = str(uuid.uuid4())
+    
+    messages_job['task_id'] = task_id
+    
     prompt_job = {"task_id": task_id, "prompt": f"[这条消息仅起占位，请以外部应用中显示的内容为准：/{task_id}]"}
-    PROMPT_JOBS.put(prompt_job)
+
+    job_package = {
+        "task_id": task_id,
+        "messages_job": messages_job,
+        "prompt_job": prompt_job
+    }
+
     RESULTS[task_id] = {"status": "pending", "stream_queue": Queue(), "error": None}
+
+    with SESSION_LOCK:
+        # The background dispatcher now handles all logic, so we just queue the job.
+        PENDING_JOBS.put(job_package)
+        logger.info(f"新任务 {task_id[:8]} 已收到并放入待处理队列。调度器将在后台处理。")
     model = request_data.get("model", "default")
     use_stream = request_data.get("stream", False)
     request_id = f"chatcmpl-{uuid.uuid4()}"
@@ -441,7 +516,6 @@ def chat_completions():
             if finish_reason == 'content-filter':
                 yield format_openai_chunk("\n\n响应被终止，可能是上下文超限或者模型内部审查的原因", model, request_id)
             
-            # 确保即使 finish_reason 为 None，也传递 'stop'
             yield format_openai_finish_chunk(model, request_id, reason=finish_reason or 'stop')
         return Response(stream_response(), mimetype='text/event-stream')
     else:
@@ -454,6 +528,55 @@ def chat_completions():
             full_response_content += "\n\n响应被终止，可能是上下文超限或者模型内部审查的原因"
             
         return jsonify(format_openai_non_stream_response(full_response_content, model, request_id, reason=finish_reason))
+
+def cleanup_and_dispatch_thread():
+    """
+    一个后台线程，通过主动ping来清理僵尸连接，并调度待处理的任务。
+    """
+    while True:
+        time.sleep(2) # Run every 2 seconds for high responsiveness
+        with SESSION_LOCK:
+            # --- 1. Active Ping & Cleanup Phase ---
+            zombie_tabs = []
+            sessions_snapshot = list(TAB_SESSIONS.items())
+            for tab_id, session in sessions_snapshot:
+                try:
+                    # Try to send a harmless comment to the queue to check the connection
+                    session['sse_queue'].put_nowait(": ping\n\n")
+                except (AttributeError, Exception): # Catches if queue is None or put fails
+                    zombie_tabs.append(tab_id)
+
+            for tab_id in zombie_tabs:
+                logger.warning(f"调度器：通过Ping检测到僵尸会话: {tab_id[:8]}，正在清理。")
+                session = TAB_SESSIONS.pop(tab_id, None)
+                if session and session.get('status') == 'busy' and session.get('job'):
+                    requeued_job = session['job']
+                    PENDING_JOBS.put(requeued_job)
+                    logger.warning(f"调度器：来自僵尸会话的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
+
+            # --- 2. Dispatch Phase ---
+            if not PENDING_JOBS.empty():
+                idle_sessions = {tid: s for tid, s in TAB_SESSIONS.items() if s.get('status') == 'idle'}
+                
+                if idle_sessions:
+                    job_package = PENDING_JOBS.get()
+                    idle_tab_id, session = idle_sessions.popitem()
+
+                    session['status'] = 'busy'
+                    session['job'] = job_package
+                    session['task_id'] = job_package['task_id']
+                    session['last_seen'] = time.time()
+
+                    prompt_job_data = job_package.get('prompt_job')
+                    if prompt_job_data:
+                        prompt_job_data['type'] = 'prompt'
+                        try:
+                            session['sse_queue'].put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
+                            logger.info(f"调度器：将待处理任务 {job_package['task_id'][:8]} 分配给了空闲的标签页 {idle_tab_id[:8]}")
+                        except Exception as e:
+                            logger.error(f"调度器：在重新分配任务时连接失效: {e}")
+                            PENDING_JOBS.put(job_package)
+                            TAB_SESSIONS.pop(idle_tab_id, None)
 
 if __name__ == '__main__':
     _load_config()
@@ -468,14 +591,17 @@ if __name__ == '__main__':
     
     load_model_map()
     
-    # 检查更新
     check_for_updates()
+
+    # 启动后台调度线程
+    dispatcher_thread = threading.Thread(target=cleanup_and_dispatch_thread, daemon=True)
+    dispatcher_thread.start()
+    logger.info("后台任务调度器已启动。")
 
     logger.info("="*60)
     logger.info("  🚀 LMArena 自动化工具 - v12.2 (中文本地化)")
     logger.info(f"  - 监听地址: http://127.0.0.1:5102")
     
-    # 使用一个字典来映射配置键和它们的中文名称
     config_keys_in_chinese = {
         "enable_auto_update": "自动更新",
         "bypass_enabled": "Bypass 模式",
