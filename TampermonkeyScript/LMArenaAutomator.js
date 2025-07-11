@@ -47,7 +47,7 @@
             currentTabId = crypto.randomUUID();
             sessionStorage.setItem('lmarena_automator_tab_id', currentTabId);
         }
-        
+
         return currentTabId;
     }
 
@@ -66,7 +66,7 @@
         }
         setTabRegistry(registry);
     }
-    
+
     // Register tab on load and then periodically
     heartbeat();
     setInterval(heartbeat, 2000);
@@ -160,7 +160,7 @@
                 if (lastUserMessage && (lastUserMessage.content.startsWith(triggerPrefix) || lastUserMessage.content.startsWith(hangingTrigger))) {
                     console.log('LMArena Automator: Trigger detected. Performing stateful merge...');
                     console.log('Automator Debug: Original body:', bodyObject);
-                    
+
                     try {
                         const serverResponse = await fetch(`${SERVER_URL}/get_messages_job?tab_id=${tabId}`);
                         const data = await serverResponse.json();
@@ -170,7 +170,7 @@
                             sessionStorage.setItem('current_task_id', task_id);
 
                             const isHangingJob = task_id.startsWith('hanging-');
-                            
+
                             // 关键修复：无论是否为挂机任务，都先从原始消息中获取会话ID
                             const originalLastMsg = bodyObject.messages[bodyObject.messages.length - 1];
                             const { evaluationId, evaluationSessionId } = originalLastMsg || {};
@@ -201,12 +201,12 @@
 
                             bodyObject.messages = baseMessages.concat(newMessages);
                             bodyObject.modelAId = target_model_id;
-                            
+
                             const finalUserMessage = newMessages.slice().reverse().find(m => m.role === 'user');
                             const finalAssistantMessage = newMessages.slice().reverse().find(m => m.role === 'assistant');
                             if(finalUserMessage) bodyObject.userMessageId = finalUserMessage.id;
                             if(finalAssistantMessage) bodyObject.modelAMessageId = finalAssistantMessage.id;
-                            
+
                             if (config.log_tampermonkey_debug) console.log('Merged body:', bodyObject);
 
                             const newOptions = { ...originalOptions, body: JSON.stringify(bodyObject) };
@@ -233,7 +233,7 @@
             const reader = responseClone.body.getReader();
             const decoder = new TextDecoder();
             let status = 'completed'; // 默认任务状态为成功
-    
+
             try {
                 while (true) {
                     const { done, value } = await reader.read();
@@ -241,14 +241,14 @@
                         break; // 流正常结束
                     }
                     const chunk = decoder.decode(value, { stream: true });
-    
+
                     // 尝试解析服务器可能发送的错误信息
                     if (chunk.includes('"type": "automator_error"')) {
                         console.error("[Automator] Server reported a stream error:", chunk);
                         status = 'failed';
                         break; // 检测到错误，中断循环
                     }
-                    
+
                     // 转发数据块到服务器
                     await fetch(`${SERVER_URL}/stream_chunk`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, chunk: chunk }) });
                 }
@@ -257,9 +257,17 @@
                 status = 'failed'; // 读取流时发生网络等错误
             } finally {
                 // 无论成功或失败，都向服务器报告结果并清理会话
-                console.log(`[Automator] Task ${taskId.substring(0, 4)} finished with status: ${status}. Reporting result...`);
-                await fetch(`${SERVER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: status }) });
+                console.log(`[Automator] Task ${taskId.substring(0, 4)} finished with status: ${status}. Preparing to report result and clean up.`);
+                try {
+                    await fetch(`${SERVER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: status }) });
+                    console.log(`[Automator] Successfully reported result for task ${taskId.substring(0, 4)}.`);
+                } catch (e) {
+                    console.error(`[Automator] Failed to report result for task ${taskId.substring(0, 4)}. Will proceed with cleanup anyway. Error:`, e);
+                }
+
+                console.log(`[Automator] Cleaning up session for task ${taskId.substring(0, 4)}.`);
                 sessionStorage.removeItem('current_task_id');
+                console.log(`[Automator] Session cleaned. Tab is now idle and ready for new jobs.`);
             }
         })();
     }
@@ -298,7 +306,7 @@
         eventSource.addEventListener('new_job', async (event) => {
             console.log(`[Tab ${tabId.substring(0, 4)}] New job received via SSE:`, event.data);
             const job = JSON.parse(event.data);
-            
+
             if (sessionStorage.getItem('current_task_id')) {
                 console.warn(`[Tab ${tabId.substring(0, 4)}] Received a job but is already busy. Ignoring.`);
                 return;
@@ -317,7 +325,7 @@
             const data = JSON.parse(event.data);
             sessionStorage.setItem('lmarena_is_hanging', data.is_hanging); // 保存状态
             const hangingPrefix = "【挂机】";
-            
+
             // 移除可能已存在的前缀，以避免重复添加
             if (document.title.startsWith(hangingPrefix)) {
                 document.title = document.title.substring(hangingPrefix.length);
@@ -327,7 +335,7 @@
                 document.title = hangingPrefix + document.title;
             }
         });
-        
+
         eventSource.addEventListener('close', () => {
             console.log(`[Tab ${tabId.substring(0, 4)}] Server requested to close SSE connection.`);
             eventSource.close();
