@@ -769,6 +769,10 @@ def dispatch_job(tab_id, session, job_package):
         prompt_job_data['type'] = 'prompt'
         try:
             if session['sse_queue']:
+                # 确保在分配任务时，挂机状态（和标题）是最新的
+                is_currently_hanging = (tab_id == HANGING_TAB_ID)
+                session['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': is_currently_hanging})}\n\n")
+
                 session['sse_queue'].put(f"event: new_job\ndata: {json.dumps(prompt_job_data)}\n\n")
                 
                 # Check if logging for hanging tasks is enabled
