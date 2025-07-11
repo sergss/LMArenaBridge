@@ -413,8 +413,18 @@ def format_openai_non_stream_response(content: str, model: str, request_id: str,
 
 def _normalize_message_content(message: dict) -> dict:
     content = message.get("content")
+    
+    # 1. 处理列表形式的内容 (例如多模态输入)
     if isinstance(content, list):
-        message["content"] = "\n\n".join([p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"])
+        # 提取文本部分并连接
+        text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+        message["content"] = "\n\n".join(text_parts)
+        content = message["content"] # 规范化后更新 content 变量
+
+    # 2. 检查 user 角色的空内容并替换为空格
+    if message.get("role") == "user" and content == "":
+        message["content"] = " "
+        
     return message
 
 def _openai_response_generator(task_id: str):
