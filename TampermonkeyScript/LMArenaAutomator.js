@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LMArena Automator
 // @namespace    http://tampermonkey.net/
-// @version      1.6.6
-// @description  Injects history with robust, buffered comprehensive logging and error reporting.
+// @version      1.6.8
+// @description  Server-Side Port Balancing.
 // @author       Lianues
 // @updateURL    https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
 // @downloadURL  https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
@@ -15,7 +15,12 @@
 (function() {
     'use strict';
 
-    const SERVER_URL = 'http://127.0.0.1:5102';
+    // --- Multi-Port Configuration (v1.6.8+) ---
+    const BASE_HOST = 'http://127.0.0.1';
+    let API_PORT = 5102; // Default API port, will be updated from config
+    let API_URL = `${BASE_HOST}:${API_PORT}`; // URL for config and port requests
+    let WORKER_URL = ''; // URL for SSE connection, determined by server
+
     let config = {};
     // --- Robust Tab ID Management ---
     const TAB_REGISTRY_KEY = 'lmarena_automator_tab_registry';
@@ -88,14 +93,17 @@
     let comprehensiveLoggingEnabled = false;
 
     async function sendLogToServer(level, message) {
+        // 日志总是发送到 API 端口
+        const logUrl = WORKER_URL || API_URL; // 如果 worker URL 可用则用它，否则用 API URL
         try {
-            await fetch(`${SERVER_URL}/log_from_client?tab_id=${tabId}`, {
+            await fetch(`${logUrl}/log_from_client?tab_id=${tabId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ level, message, tab_id: tabId })
             });
         } catch (e) {
-            originalConsole.error("[Automator] Failed to send log to server:", e);
+            // Suppress failed-to-fetch errors for logging to avoid console spam
+            // originalConsole.error("[Automator] Failed to send log to server:", e);
         }
     }
 
@@ -118,26 +126,48 @@
 
     console.log("LMArena Automator v7.1 (Final Logging Fix): Script started...");
 
-    async function loadConfig() {
-        console.log(`[Tab ${tabId.substring(0, 4)}] Attempting to load config from server...`);
+    async function loadConfigAndGetPort() {
+        // 1. 从 API 端口加载配置
+        console.log(`[Tab ${tabId.substring(0, 4)}] Attempting to load config from API URL: ${API_URL}`);
         try {
-            const response = await fetch(`${SERVER_URL}/get_config?tab_id=${tabId}`);
-            if (response.ok) {
-                config = await response.json();
-                comprehensiveLoggingEnabled = !!config.enable_comprehensive_logging;
-                console.log("Config loaded. Comprehensive logging is", comprehensiveLoggingEnabled ? "ENABLED." : "DISABLED.");
-            } else {
-                console.error(`Failed to load config, server returned status: ${response.status}`);
+            const configResponse = await fetch(`${API_URL}/get_config?tab_id=${tabId}`);
+            if (!configResponse.ok) {
+                console.error(`Failed to load config, status: ${configResponse.status}. Retrying in 5s.`);
+                return false;
             }
-        } catch (e) {
-            console.error("Critical error fetching config:", e);
-        } finally {
+            config = await configResponse.json();
+            API_PORT = config.api_port || API_PORT; // 更新 API 端口以防万一
+            API_URL = `${BASE_HOST}:${API_PORT}`;
+            comprehensiveLoggingEnabled = !!config.enable_comprehensive_logging;
+            console.log("Config loaded. Comprehensive logging is", comprehensiveLoggingEnabled ? "ENABLED." : "DISABLED.");
             configLoaded = true;
+            // 立即处理缓冲的日志
             if (comprehensiveLoggingEnabled) {
                 console.log(`Processing ${logBuffer.length} buffered logs...`);
                 logBuffer.forEach(log => sendLogToServer(log.level, log.message));
                 logBuffer = [];
             }
+    
+            // 2. 从 API 端口请求一个可用的 Worker 端口
+            console.log(`[Tab ${tabId.substring(0, 4)}] Requesting a worker port from ${API_URL}`);
+            const portResponse = await fetch(`${API_URL}/get_worker_port?tab_id=${tabId}`);
+            if (portResponse.ok) {
+                const data = await portResponse.json();
+                if (data.status === 'success' && data.port) {
+                    WORKER_URL = `${BASE_HOST}:${data.port}`;
+                    console.log(`[Tab ${tabId.substring(0, 4)}] Server assigned worker port ${data.port}. Worker URL: ${WORKER_URL}`);
+                    return true; // 成功
+                }
+            }
+            // 如果请求失败或服务器返回错误
+            const errorData = await portResponse.json().catch(() => ({}));
+            console.error(`Failed to get a worker port: ${errorData.message || `Status ${portResponse.status}`}. Retrying in 5s.`);
+            return false;
+    
+        } catch (e) {
+            console.error(`Critical error during setup: ${e}. Retrying in 5s.`);
+            configLoaded = true; // 即使失败也要允许日志发送
+            return false;
         }
     }
 
@@ -159,10 +189,14 @@
                 // 检查是否是普通触发或挂机触发
                 if (lastUserMessage && (lastUserMessage.content.startsWith(triggerPrefix) || lastUserMessage.content.startsWith(hangingTrigger))) {
                     console.log('LMArena Automator: Trigger detected. Performing stateful merge...');
+                    if (!WORKER_URL) {
+                        console.error("Automator Critical Error: Worker URL not set. Cannot get job. Aborting.");
+                        return originalFetch.apply(this, args);
+                    }
                     console.log('Automator Debug: Original body:', bodyObject);
 
                     try {
-                        const serverResponse = await fetch(`${SERVER_URL}/get_messages_job?tab_id=${tabId}`);
+                        const serverResponse = await fetch(`${WORKER_URL}/get_messages_job?tab_id=${tabId}`);
                         const data = await serverResponse.json();
 
                         if (data.status === 'success' && data.job) {
@@ -250,19 +284,24 @@
                     }
 
                     // 转发数据块到服务器
-                    await fetch(`${SERVER_URL}/stream_chunk`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, chunk: chunk }) });
+                    if (!WORKER_URL) continue; // 如果 worker URL 无效则跳过
+                    await fetch(`${WORKER_URL}/stream_chunk`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, chunk: chunk }) });
                 }
             } catch (e) {
                 console.error("[Automator] Error while reading response stream:", e);
                 status = 'failed'; // 读取流时发生网络等错误
             } finally {
-                // 无论成功或失败，都向服务器报告结果并清理会话
-                console.log(`[Automator] Task ${taskId.substring(0, 4)} finished with status: ${status}. Preparing to report result and clean up.`);
-                try {
-                    await fetch(`${SERVER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: status }) });
-                    console.log(`[Automator] Successfully reported result for task ${taskId.substring(0, 4)}.`);
-                } catch (e) {
-                    console.error(`[Automator] Failed to report result for task ${taskId.substring(0, 4)}. Will proceed with cleanup anyway. Error:`, e);
+                if (!WORKER_URL) {
+                     console.error("[Automator] Cannot report result: Worker URL is not set.");
+                } else {
+                    // 无论成功或失败，都向服务器报告结果并清理会话
+                    console.log(`[Automator] Task ${taskId.substring(0, 4)} finished with status: ${status}. Preparing to report result and clean up.`);
+                    try {
+                        await fetch(`${WORKER_URL}/report_result`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, tab_id: tabId, status: status }) });
+                        console.log(`[Automator] Successfully reported result for task ${taskId.substring(0, 4)}.`);
+                    } catch (e) {
+                        console.error(`[Automator] Failed to report result for task ${taskId.substring(0, 4)}. Will proceed with cleanup anyway. Error:`, e);
+                    }
                 }
 
                 console.log(`[Automator] Cleaning up session for task ${taskId.substring(0, 4)}.`);
@@ -294,13 +333,19 @@
     }
 
     function connectEventSource() {
-        console.log(`[Tab ${tabId.substring(0, 4)}] Connecting to SSE endpoint...`);
+        if (!WORKER_URL) {
+            console.error("Cannot connect to SSE: Worker URL not set. Retrying setup...");
+            setTimeout(main, 5000); // 重新执行主设置流程
+            return;
+        }
+    
+        console.log(`[Tab ${tabId.substring(0, 4)}] Connecting to SSE endpoint at ${WORKER_URL}...`);
         const isHanging = sessionStorage.getItem('lmarena_is_hanging') === 'true';
         console.log(`[Tab ${tabId.substring(0, 4)}] Reporting hanging status to server: ${isHanging}`);
-        const eventSource = new EventSource(`${SERVER_URL}/events?tab_id=${tabId}&is_hanging=${isHanging}`);
-
+        const eventSource = new EventSource(`${WORKER_URL}/events?tab_id=${tabId}&is_hanging=${isHanging}`);
+    
         eventSource.onopen = () => {
-            console.log(`[Tab ${tabId.substring(0, 4)}] SSE connection established.`);
+            console.log(`[Tab ${tabId.substring(0, 4)}] SSE connection to ${WORKER_URL} established.`);
         };
 
         eventSource.addEventListener('new_job', async (event) => {
@@ -361,12 +406,12 @@
     }
 
     async function sendPageSource() {
-        // 等待页面完全加载
+        // 页面源数据发送到 API 端口
         if (document.readyState === "complete") {
-            console.log(`[Tab ${tabId.substring(0, 4)}] Page loaded. Sending source to server for model check...`);
+            console.log(`[Tab ${tabId.substring(0, 4)}] Page loaded. Sending source to API server for model check...`);
             try {
                 const htmlContent = document.documentElement.outerHTML;
-                await fetch(`${SERVER_URL}/update_models?tab_id=${tabId}`, {
+                await fetch(`${API_URL}/update_models?tab_id=${tabId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'text/html' },
                     body: htmlContent
@@ -385,26 +430,27 @@
             location.reload();
             return; // 停止执行脚本的其余部分，等待第二次刷新完成
         }
-
-        // Clear any stale task ID on script start
+    
         sessionStorage.removeItem('current_task_id');
-
-        await loadConfig();
         hookFetch();
-
+    
+        // 循环直到成功获取配置和 Worker 端口
+        while (true) {
+            const success = await loadConfigAndGetPort();
+            if (success) {
+                break; // 成功，跳出循环
+            }
+            // 失败则等待5秒后重试
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    
         // 先处理一次性的页面加载任务
         if (document.readyState === "complete") {
             await sendPageSource();
         } else {
-            // 使用 aysnc/await 确保 sendPageSource 在 load 事件后完成
-            await new Promise(resolve => {
-                window.addEventListener('load', async () => {
-                    await sendPageSource();
-                    resolve();
-                });
-            });
+            window.addEventListener('load', sendPageSource);
         }
-
+    
         // 在所有一次性任务完成后，再建立持久的SSE连接
         connectEventSource();
     }

@@ -1,10 +1,11 @@
 # local_openai_history_server.py
-# v12.2 - Chinese Localization
+# v12.4 - Server-Side Port Balancing
 
 import logging
 import os
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+from werkzeug.serving import run_simple
 from queue import Queue, Empty
 import uuid
 import threading
@@ -32,9 +33,11 @@ werkzeug_logger.disabled = True
 
 # --- 数据存储 ---
 PENDING_JOBS = Queue()
-TAB_SESSIONS = {}  # { "tab_id": {"status": "idle"|"busy", "job": {}, "last_seen": timestamp, "task_id": "...", "sse_queue": Queue()} }
+# { "tab_id": {"status": "idle"|"busy", "job": {}, "last_seen": timestamp, "task_id": "...", "sse_queue": Queue(), "port": 5103} }
+TAB_SESSIONS = {}
 SESSION_LOCK = threading.Lock()
 RESULTS = {}
+PORT_CONNECTIONS = {} # {5103: 2, 5104: 5}
 # 防人机检测挂机池
 HANGING_TAB_ID = None
 NEXT_HANGING_JOB_TIME = 0
@@ -273,10 +276,39 @@ def get_config():
             jsonc_content = f.read()
             json_content = re.sub(r'//.*', '', jsonc_content)
             json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
-            return jsonify(json.loads(json_content))
+            config_data = json.loads(json_content)
+            # 从配置中移除 worker_ports，不需要发送给客户端
+            config_data.pop('worker_ports', None)
+            return jsonify(config_data)
     except Exception as e:
         logger.error(f"读取或解析 config.jsonc 失败: {e}")
         return jsonify({"error": "Config file issue"}), 500
+
+@app.route('/get_worker_port', methods=['GET'])
+def get_worker_port():
+    """为新的标签页分配一个负载最低的 Worker 端口。"""
+    with SESSION_LOCK:
+        worker_ports = CONFIG.get("worker_ports", [])
+        if not worker_ports:
+            return jsonify({"status": "error", "message": "No worker ports configured."}), 500
+
+        # 找到连接数最少的端口
+        best_port = -1
+        min_connections = float('inf')
+
+        for port in worker_ports:
+            connections = PORT_CONNECTIONS.get(port, 0)
+            if connections < min_connections:
+                min_connections = connections
+                best_port = port
+        
+        # 检查选出的最佳端口是否已满（例如每个端口限制6个连接）
+        if min_connections < 6:
+            logger.info(f"为新标签页分配了端口 {best_port} (当前连接数: {min_connections})")
+            return jsonify({"status": "success", "port": best_port})
+        else:
+            logger.error(f"所有 Worker 端口 {worker_ports} 的连接数都已达到或超过6个。无法分配新端口。")
+            return jsonify({"status": "error", "message": "All worker ports are at maximum capacity."}), 503
 
 @app.route('/')
 def index():
@@ -325,6 +357,14 @@ def get_messages_job():
 def events():
     tab_id = request.args.get('tab_id')
     is_hanging = request.args.get('is_hanging') == 'true'
+    
+    # 获取当前连接的端口。Werkzeug 会将它放入 environ。
+    port_str = request.environ.get('SERVER_PORT')
+    if not port_str:
+        logger.error("无法确定SSE连接的服务器端口。")
+        return Response("Could not determine server port", status=500)
+    port = int(port_str)
+
     if not tab_id:
         return Response("tab_id is required", status=400)
 
@@ -332,23 +372,29 @@ def events():
         q = Queue()
         with SESSION_LOCK:
             if tab_id not in TAB_SESSIONS:
-                logger.info(f"新的SSE连接已建立: {tab_id[:8]} (报告挂机状态: {is_hanging})")
+                logger.info(f"新的SSE连接在端口 {port} 上建立: {tab_id[:8]} (报告挂机状态: {is_hanging})")
+                PORT_CONNECTIONS[port] = PORT_CONNECTIONS.get(port, 0) + 1
                 TAB_SESSIONS[tab_id] = {
-                    "status": "idle",
-                    "job": None,
-                    "task_id": None,
-                    "last_seen": time.time(),
-                    "sse_queue": q,
-                    "is_hanging_client": is_hanging,
-                    "refresh_requested": False # 新增：跟踪是否已请求刷新
+                    "status": "idle", "job": None, "task_id": None,
+                    "last_seen": time.time(), "sse_queue": q,
+                    "is_hanging_client": is_hanging, "port": port,
+                    "refresh_requested": False
                 }
             else:
-                logger.info(f"标签页 {tab_id[:8]} 重新建立了SSE连接。")
-                TAB_SESSIONS[tab_id]['sse_queue'] = q
-                TAB_SESSIONS[tab_id]['last_seen'] = time.time()
-                TAB_SESSIONS[tab_id]['is_hanging_client'] = is_hanging
-                TAB_SESSIONS[tab_id]['refresh_requested'] = False # 重连时重置刷新请求状态
-            
+                old_port = TAB_SESSIONS[tab_id].get('port')
+                logger.info(f"标签页 {tab_id[:8]} 在端口 {port} 上重新建立了SSE连接。")
+                if old_port and old_port != port:
+                    logger.warning(f"标签页 {tab_id[:8]} 从旧端口 {old_port} 移动到了新端口 {port}。")
+                    # 减少旧端口连接数，增加新端口连接数
+                    PORT_CONNECTIONS[old_port] = max(0, PORT_CONNECTIONS.get(old_port, 1) - 1)
+                    PORT_CONNECTIONS[port] = PORT_CONNECTIONS.get(port, 0) + 1
+                
+                TAB_SESSIONS[tab_id].update({
+                    'sse_queue': q, 'last_seen': time.time(),
+                    'is_hanging_client': is_hanging, 'port': port,
+                    'refresh_requested': False
+                })
+
             # 立即同步挂机状态，确保客户端状态与服务器一致
             is_currently_hanging = (tab_id == HANGING_TAB_ID)
             q.put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': is_currently_hanging})}\n\n")
@@ -376,10 +422,13 @@ def events():
                 message = q.get()
                 yield message
         except GeneratorExit:
-            logger.info(f"SSE连接已由客户端关闭: {tab_id[:8]}")
+            # port 变量在 stream 函数的闭包中是可用的
+            logger.info(f"SSE连接已由客户端关闭: {tab_id[:8]} (端口: {port})")
             with SESSION_LOCK:
                 if tab_id in TAB_SESSIONS:
                     TAB_SESSIONS[tab_id]['sse_queue'] = None
+                    # 注意：在这里不减少连接计数。连接计数将在 cleanup_and_dispatch_thread 中处理，
+                    # 因为那里是唯一确定性地清理僵尸会话的地方。
 
     return Response(stream(), mimetype='text/event-stream')
 
@@ -654,7 +703,9 @@ def cleanup_and_dispatch_thread():
 
     while True:
         try:
-            time.sleep(2)  # Run every 2 seconds for high responsiveness
+            # Increased responsiveness for higher concurrency
+            # Reduced from 2s to 0.5s to allow faster dispatching when multiple workers are available
+            time.sleep(0.5)
 
             # 读取配置，确保是最新的
             enable_hanging = CONFIG.get("enable_anti_bot_hanging", False)
@@ -718,18 +769,23 @@ def cleanup_and_dispatch_thread():
                     logger.warning(f"调度器：检测到 {len(zombie_tabs)} 个僵尸会话: {[tid[:8] for tid in zombie_tabs]}，正在清理。")
                     for tab_id in zombie_tabs:
                         session = TAB_SESSIONS.pop(tab_id, None)
-                        
-                        if tab_id == HANGING_TAB_ID:
-                            logger.info(f"调度器：挂机标签页 {tab_id[:8]} 是僵尸，正在重置。")
-                            HANGING_TAB_ID = None
-                        
-                        if session and session.get('status') == 'busy' and session.get('job'):
-                            if not session['job'].get("is_hanging_job"):
-                                requeued_job = session['job']
-                                PENDING_JOBS.put(requeued_job)
-                                logger.warning(f"调度器：来自僵尸会话 {tab_id[:8]} 的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
-                            else:
-                                logger.info(f"调度器：丢弃来自僵尸会话 {tab_id[:8]} 的挂机任务 {session['task_id'][:8]}。")
+                        if session:
+                            port = session.get('port')
+                            if port:
+                                PORT_CONNECTIONS[port] = max(0, PORT_CONNECTIONS.get(port, 1) - 1)
+                                logger.info(f"清理僵尸会话 {tab_id[:8]}，端口 {port} 连接数减至 {PORT_CONNECTIONS[port]}")
+                            
+                            if tab_id == HANGING_TAB_ID:
+                                logger.info(f"调度器：挂机标签页 {tab_id[:8]} 是僵尸，正在重置。")
+                                HANGING_TAB_ID = None
+                            
+                            if session.get('status') == 'busy' and session.get('job'):
+                                if not session['job'].get("is_hanging_job"):
+                                    requeued_job = session['job']
+                                    PENDING_JOBS.put(requeued_job)
+                                    logger.warning(f"调度器：来自僵尸会话 {tab_id[:8]} 的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
+                                else:
+                                    logger.info(f"调度器：丢弃来自僵尸会话 {tab_id[:8]} 的挂机任务 {session['task_id'][:8]}。")
 
                 # --- 2. Anti-Bot Hanging Management Phase ---
                 previous_hanging_id = HANGING_TAB_ID
@@ -784,33 +840,75 @@ def cleanup_and_dispatch_thread():
                         PENDING_JOBS.put(hanging_job_package)
                         NEXT_HANGING_JOB_TIME = current_time + hanging_interval
 
-                # --- 4. Dispatch Phase ---
-                if not PENDING_JOBS.empty():
-                    job_package = PENDING_JOBS.queue[0]
-                    is_hanging = job_package.get("is_hanging_job", False)
+                # --- 4. Dispatch Phase (Optimized for High Concurrency) ---
+                # 持续调度，直到队列为空或没有可用的 Worker (满足 FIFO 原则)
+                while not PENDING_JOBS.empty():
+                    # 1. 识别所有空闲 Worker
+                    idle_sessions = {tid: s for tid, s in TAB_SESSIONS.items() if s.get('status') == 'idle'}
+                    
+                    if not idle_sessions:
+                        # 没有空闲 Worker，停止本次调度循环
+                        break
 
+                    # 2. 查看队列中的下一个任务 (Peek)
+                    try:
+                        job_package = PENDING_JOBS.queue[0]
+                    except IndexError:
+                        break # 队列变空
+
+                    is_hanging_job = job_package.get("is_hanging_job", False)
                     target_session_id = None
 
-                    if is_hanging:
-                        if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                    # 3. 寻找合适的 Worker
+                    if is_hanging_job:
+                        # 挂机任务必须分配给挂机池标签页
+                        if HANGING_TAB_ID and HANGING_TAB_ID in idle_sessions:
                             target_session_id = HANGING_TAB_ID
+                        # 如果挂机池不可用，挂机任务（作为队首）将阻塞队列，等待下一次循环
+                        
                     else:
-                        idle_non_hanging_sessions = {
-                            tid: s for tid, s in TAB_SESSIONS.items()
-                            if s.get('status') == 'idle' and tid != HANGING_TAB_ID
-                        }
-                        if idle_non_hanging_sessions:
-                            target_session_id = list(idle_non_hanging_sessions.keys())[0]
-                        elif HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                        # 普通任务
+                        # 优先选择非挂机池的空闲 Worker
+                        idle_non_hanging = [tid for tid in idle_sessions.keys() if tid != HANGING_TAB_ID]
+                        
+                        if idle_non_hanging:
+                            # 选择第一个可用的非挂机 Worker
+                            target_session_id = idle_non_hanging[0]
+                        elif HANGING_TAB_ID and HANGING_TAB_ID in idle_sessions:
+                            # 如果没有普通 Worker，则使用挂机池 Worker
                             target_session_id = HANGING_TAB_ID
 
+                    # 4. 分配任务
                     if target_session_id:
-                        job_to_dispatch = PENDING_JOBS.get()
-                        session = TAB_SESSIONS[target_session_id]
-                        dispatch_job(target_session_id, session, job_to_dispatch)
-                        if not is_hanging and target_session_id == HANGING_TAB_ID:
-                            NEXT_HANGING_JOB_TIME = time.time() + hanging_interval
-                            logger.info(f"挂机标签页被用于执行普通任务，下一次挂机任务推迟。")
+                        try:
+                            session = TAB_SESSIONS.get(target_session_id)
+                            # 再次确认 Worker 状态（虽然在锁内，但作为防御性编程）
+                            if session and session['status'] == 'idle':
+                                # 正式从队列中取出任务
+                                job_to_dispatch = PENDING_JOBS.get()
+                                
+                                # 验证 (可选，但在并发环境中很重要)
+                                if job_to_dispatch['task_id'] != job_package['task_id']:
+                                     logger.error("严重错误：调度器取出的任务与预期的不一致！")
+                                     PENDING_JOBS.put(job_to_dispatch) # 放回去
+                                     break
+
+                                dispatch_job(target_session_id, session, job_to_dispatch)
+                                
+                                # 如果普通任务使用了挂机池，推迟下一次挂机任务
+                                if not is_hanging_job and target_session_id == HANGING_TAB_ID:
+                                    # 确保 hanging_interval 已定义
+                                    hanging_interval = CONFIG.get("hanging_interval_seconds", 120)
+                                    NEXT_HANGING_JOB_TIME = time.time() + hanging_interval
+                                    logger.info(f"挂机标签页被用于执行普通任务，下一次挂机任务推迟。")
+                            else:
+                                # Worker 状态意外改变
+                                break
+                        except Empty:
+                            break # 队列突然空了
+                    else:
+                        # 队首任务无法调度（例如挂机任务但挂机池忙碌），停止本次调度循环以保持 FIFO
+                        break
 
         except Exception:
             logger.error("调度器后台线程发生致命错误！将会在10秒后重试。", exc_info=True)
@@ -873,8 +971,8 @@ if __name__ == '__main__':
     logger.info("后台任务调度器已启动。")
 
     logger.info("="*60)
-    logger.info("  🚀 LMArena 自动化工具 - v12.2 (中文本地化)")
-    logger.info(f"  - 监听地址: http://127.0.0.1:5102")
+    logger.info("  🚀 LMArena 自动化工具 - v12.3 (多端口并发)")
+    # logger.info(f"  - 监听地址: http://127.0.0.1:5102")
     
     config_keys_in_chinese = {
         "enable_auto_update": "自动更新",
@@ -895,5 +993,47 @@ if __name__ == '__main__':
         
     logger.info("\n  请在浏览器中打开一个 LMArena 的 Direct Chat 页面以激活油猴脚本。")
     logger.info("="*60)
+
+    # --- 多端口启动逻辑 (v12.4) ---
+    api_port = CONFIG.get("api_port", 5102)
+    worker_ports = CONFIG.get("worker_ports", [])
     
-    app.run(host='0.0.0.0', port=5102, threaded=True)
+    # 初始化所有 worker 端口的连接计数
+    for p in worker_ports:
+        PORT_CONNECTIONS[p] = 0
+
+    all_ports = sorted(list(set([api_port] + worker_ports)))
+    
+    logger.info(f"🌐 准备在以下 {len(all_ports)} 个端口上启动服务器: {all_ports}")
+    logger.info(f"  - API 入口端口: {api_port}")
+    logger.info(f"  - 浏览器 Worker 端口: {worker_ports}")
+
+    threads = []
+    host = '0.0.0.0'
+
+    for port in all_ports:
+        try:
+            port_num = int(port)
+            # Werkzeug 的 run_simple 在一个线程中运行 Flask 应用。
+            # 我们为每个端口创建一个独立的线程来运行一个服务器实例。
+            # 所有线程共享同一个 Flask app 对象和全局变量，实现了状态共享。
+            t = threading.Thread(target=run_simple, args=(host, port_num, app), kwargs={'use_reloader': False, 'use_debugger': False, 'threaded': True})
+            t.daemon = True
+            threads.append(t)
+            t.start()
+            logger.info(f"  ✅ 服务器已在 http://{host}:{port_num} 启动")
+        except Exception as e:
+            logger.error(f"  ❌ 无法在端口 {port} 启动服务器: {e}")
+
+    if not threads:
+        logger.error("未能启动任何服务器实例。程序将退出。")
+        sys.exit(1)
+
+    # 主线程等待所有服务器线程 (虽然它们是守护线程，但这样可以保持主程序运行)
+    try:
+        while True:
+            # 保持主线程活跃，以便接收 Ctrl+C
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("收到中断信号，正在关闭服务器...")
+        # 注意：由于 Werkzeug 服务器运行在守护线程中，当主线程退出时它们会自动停止。
