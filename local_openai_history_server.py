@@ -39,6 +39,9 @@ RESULTS = {}
 HANGING_TAB_ID = None
 NEXT_HANGING_JOB_TIME = 0
 
+# --- 常量定义 ---
+TASK_TIMEOUT_SECONDS = 300  # 任务超时时间（5分钟）
+
 # --- 模型映射 ---
 MODEL_NAME_TO_ID_MAP = {}
 DEFAULT_MODEL_ID = "f44e280a-7914-43ca-a25d-ecfcc5d48d09"
@@ -330,12 +333,21 @@ def events():
         with SESSION_LOCK:
             if tab_id not in TAB_SESSIONS:
                 logger.info(f"新的SSE连接已建立: {tab_id[:8]} (报告挂机状态: {is_hanging})")
-                TAB_SESSIONS[tab_id] = {"status": "idle", "job": None, "task_id": None, "last_seen": time.time(), "sse_queue": q, "is_hanging_client": is_hanging}
+                TAB_SESSIONS[tab_id] = {
+                    "status": "idle",
+                    "job": None,
+                    "task_id": None,
+                    "last_seen": time.time(),
+                    "sse_queue": q,
+                    "is_hanging_client": is_hanging,
+                    "refresh_requested": False # 新增：跟踪是否已请求刷新
+                }
             else:
                 logger.info(f"标签页 {tab_id[:8]} 重新建立了SSE连接。")
                 TAB_SESSIONS[tab_id]['sse_queue'] = q
                 TAB_SESSIONS[tab_id]['last_seen'] = time.time()
                 TAB_SESSIONS[tab_id]['is_hanging_client'] = is_hanging
+                TAB_SESSIONS[tab_id]['refresh_requested'] = False # 重连时重置刷新请求状态
             
             # 立即同步挂机状态，确保客户端状态与服务器一致
             is_currently_hanging = (tab_id == HANGING_TAB_ID)
@@ -661,11 +673,16 @@ def cleanup_and_dispatch_thread():
                 zombie_tabs = []
                 active_sessions = list(TAB_SESSIONS.items())
 
+                current_time_for_timeout = time.time()
+
                 for tab_id, session in active_sessions:
                     # 标记僵尸会话的条件:
                     # 1. SSE队列不存在 (客户端已正常断开)
                     # 2. Ping失败 (客户端异常断开)
+                    # 3. 任务超时 (客户端可能无响应)
                     is_zombie = False
+
+                    # 条件 1 & 2: 连接检查
                     if not session.get('sse_queue'):
                         is_zombie = True
                     else:
@@ -674,6 +691,26 @@ def cleanup_and_dispatch_thread():
                         except Exception:
                             is_zombie = True
                     
+                    # 条件 3: 任务超时检查
+                    if not is_zombie and session.get('status') == 'busy' and 'task_start_time' in session:
+                        if current_time_for_timeout - session['task_start_time'] > TASK_TIMEOUT_SECONDS:
+                            if not session.get('refresh_requested', False):
+                                # 首次超时，尝试发送刷新请求
+                                logger.warning(f"调度器：任务超时但连接活跃。向标签页 {tab_id[:8]} (任务 {session['task_id'][:8]}) 发送刷新请求。")
+                                try:
+                                    session['sse_queue'].put_nowait(f"event: refresh\ndata: {{}}\n\n")
+                                    session['refresh_requested'] = True
+                                    # 重置开始时间，给予刷新后重新处理的时间
+                                    session['task_start_time'] = current_time_for_timeout
+                                except Exception:
+                                    # 如果发送失败，则立即标记为僵尸
+                                    logger.error(f"调度器：向超时标签页 {tab_id[:8]} 发送刷新请求失败。标记为僵尸。")
+                                    is_zombie = True
+                            else:
+                                # 已经请求过刷新但仍然超时，标记为僵尸
+                                logger.warning(f"调度器：标签页 {tab_id[:8]} 在请求刷新后仍然超时 (任务 {session['task_id'][:8]})。标记为僵尸会话。")
+                                is_zombie = True
+
                     if is_zombie:
                         zombie_tabs.append(tab_id)
 
@@ -787,6 +824,7 @@ def dispatch_job(tab_id, session, job_package):
     session['job'] = job_package
     session['task_id'] = job_package['task_id']
     session['last_seen'] = time.time()
+    session['task_start_time'] = time.time() # 记录任务开始时间用于超时检测
 
     prompt_job_data = job_package.get('prompt_job')
     if prompt_job_data:

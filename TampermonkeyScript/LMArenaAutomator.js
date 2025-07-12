@@ -336,6 +336,17 @@
             }
         });
 
+        // 新增：处理服务器发送的刷新请求
+        eventSource.addEventListener('refresh', () => {
+            console.warn(`[Tab ${tabId.substring(0, 4)}] 收到服务器的刷新请求（任务超时）。正在刷新页面...`);
+            // 设置标志，表明即将进行第一次自动刷新
+            sessionStorage.setItem('auto_refresh_pending', 'true');
+            // 延迟 1 秒刷新，以确保日志有机会发送到服务器
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
+        });
+
         eventSource.addEventListener('close', () => {
             console.log(`[Tab ${tabId.substring(0, 4)}] Server requested to close SSE connection.`);
             eventSource.close();
@@ -367,6 +378,14 @@
     }
 
     async function main() {
+        // 检查是否需要进行第二次刷新
+        if (sessionStorage.getItem('auto_refresh_pending') === 'true') {
+            console.warn(`[Tab ${tabId.substring(0, 4)}] 检测到第一次自动刷新完成。正在执行第二次刷新以确保状态清除...`);
+            sessionStorage.removeItem('auto_refresh_pending'); // 清除标志
+            location.reload();
+            return; // 停止执行脚本的其余部分，等待第二次刷新完成
+        }
+
         // Clear any stale task ID on script start
         sessionStorage.removeItem('current_task_id');
 
