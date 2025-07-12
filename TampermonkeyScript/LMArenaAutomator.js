@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMArena Automator
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5.1
+// @version      1.6.5
 // @description  Injects history with robust, buffered comprehensive logging and error reporting.
 // @author       Lianues
 // @updateURL    https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
@@ -15,7 +15,6 @@
 (function() {
     'use strict';
 
-    let currentJobDetails = null; // Cache for the current job's message details
     const SERVER_URL = 'http://127.0.0.1:5102';
     let config = {};
     // --- Robust Tab ID Management ---
@@ -162,67 +161,63 @@
                     console.log('LMArena Automator: Trigger detected. Performing stateful merge...');
                     console.log('Automator Debug: Original body:', bodyObject);
 
-                    // 使用缓存的作业详情，而不是再次从服务器获取
-                    if (currentJobDetails) {
-                        console.log('LMArena Automator: Using CACHED job details for merge.');
-                        const { message_templates, target_model_id, task_id } = currentJobDetails;
+                    try {
+                        const serverResponse = await fetch(`${SERVER_URL}/get_messages_job?tab_id=${tabId}`);
+                        const data = await serverResponse.json();
 
-                        // 关键：在使用后立即清除缓存，为下一个任务做准备
-                        currentJobDetails = null;
+                        if (data.status === 'success' && data.job) {
+                            const { message_templates, target_model_id, task_id } = data.job;
+                            sessionStorage.setItem('current_task_id', task_id);
 
-                        // 确保 task_id 在 sessionStorage 中是最新的（虽然在 SSE 处理中已设置）
-                        sessionStorage.setItem('current_task_id', task_id);
+                            const isHangingJob = task_id.startsWith('hanging-');
 
-                        // 关键修复：无论是否为挂机任务，都先从原始消息中获取会话ID
-                        const originalLastMsg = bodyObject.messages[bodyObject.messages.length - 1];
-                        const { evaluationId, evaluationSessionId } = originalLastMsg || {};
+                            // 关键修复：无论是否为挂机任务，都先从原始消息中获取会话ID
+                            const originalLastMsg = bodyObject.messages[bodyObject.messages.length - 1];
+                            const { evaluationId, evaluationSessionId } = originalLastMsg || {};
 
-                        if (!evaluationSessionId) {
-                            console.error("Automator Critical Error: Could not extract evaluationSessionId from original request. Aborting merge.");
-                            // 即使失败，也需要清理 task_id，否则会卡住
-                            sessionStorage.removeItem('current_task_id');
-                            // 考虑向服务器报告失败？
-                            return originalFetch.apply(this, args); // 中断合并，执行原始请求（占位符）
+                            if (!evaluationSessionId) {
+                                console.error("Automator Critical Error: Could not extract evaluationSessionId. Aborting merge.");
+                                return originalFetch.apply(this, args); // 中断合并，执行原始请求
+                            }
+
+                            // 对于所有任务，我们都将完全替换历史记录，而不是追加。
+                            const baseMessages = [];
+
+                            let parentMessageId = null;
+                            const newMessages = message_templates.map(template => {
+                                const newMsg = {
+                                    ...template, id: crypto.randomUUID(),
+                                    evaluationId,
+                                    evaluationSessionId, // 确保此ID被正确传递
+                                    parentMessageIds: parentMessageId ? [parentMessageId] : [],
+                                    experimental_attachments: [], failureReason: null, metadata: null,
+                                    participantPosition: "a", createdAt: new Date().toISOString(),
+                                    updatedAt: new Date().toISOString(),
+                                    status: template.role === 'assistant' ? 'pending' : 'success',
+                                };
+                                parentMessageId = newMsg.id;
+                                return newMsg;
+                            });
+
+                            bodyObject.messages = baseMessages.concat(newMessages);
+                            bodyObject.modelAId = target_model_id;
+
+                            const finalUserMessage = newMessages.slice().reverse().find(m => m.role === 'user');
+                            const finalAssistantMessage = newMessages.slice().reverse().find(m => m.role === 'assistant');
+                            if(finalUserMessage) bodyObject.userMessageId = finalUserMessage.id;
+                            if(finalAssistantMessage) bodyObject.modelAMessageId = finalAssistantMessage.id;
+
+                            if (config.log_tampermonkey_debug) console.log('Merged body:', bodyObject);
+
+                            const newOptions = { ...originalOptions, body: JSON.stringify(bodyObject) };
+                            const response = await originalFetch.apply(this, [url, newOptions]);
+                            handleResponseStream(response);
+                            return response;
+                        } else {
+                             console.warn("Automator: Trigger detected but no job received from server. Proceeding with original request.");
                         }
-
-                        // 对于所有任务，我们都将完全替换历史记录，而不是追加。
-                        const baseMessages = [];
-
-                        let parentMessageId = null;
-                        const newMessages = message_templates.map(template => {
-                            const newMsg = {
-                                ...template, id: crypto.randomUUID(),
-                                evaluationId,
-                                evaluationSessionId, // 确保此ID被正确传递
-                                parentMessageIds: parentMessageId ? [parentMessageId] : [],
-                                experimental_attachments: [], failureReason: null, metadata: null,
-                                participantPosition: "a", createdAt: new Date().toISOString(),
-                                updatedAt: new Date().toISOString(),
-                                status: template.role === 'assistant' ? 'pending' : 'success',
-                            };
-                            parentMessageId = newMsg.id;
-                            return newMsg;
-                        });
-
-                        bodyObject.messages = baseMessages.concat(newMessages);
-                        bodyObject.modelAId = target_model_id;
-
-                        const finalUserMessage = newMessages.slice().reverse().find(m => m.role === 'user');
-                        const finalAssistantMessage = newMessages.slice().reverse().find(m => m.role === 'assistant');
-                        if(finalUserMessage) bodyObject.userMessageId = finalUserMessage.id;
-                        if(finalAssistantMessage) bodyObject.modelAMessageId = finalAssistantMessage.id;
-
-                        if (config.log_tampermonkey_debug) console.log('Merged body:', bodyObject);
-
-                        const newOptions = { ...originalOptions, body: JSON.stringify(bodyObject) };
-                        const response = await originalFetch.apply(this, [url, newOptions]);
-                        handleResponseStream(response);
-                        return response;
-                    } else {
-                        // 如果触发了拦截器但没有缓存的详情，这是一个严重错误（时序问题）
-                        console.error("LMArena Automator CRITICAL ERROR: Trigger detected but no cached job details found. This should not happen. Proceeding with original request to avoid deadlock.");
-                        // 这种情况发生时，需要清理 task_id，否则标签页会卡住
-                        sessionStorage.removeItem('current_task_id');
+                    } catch (e) {
+                        console.error("LMArena Automator: Failed to perform stateful merge:", e);
                     }
                 }
             }
@@ -312,40 +307,16 @@
             console.log(`[Tab ${tabId.substring(0, 4)}] New job received via SSE:`, event.data);
             const job = JSON.parse(event.data);
 
-            if (sessionStorage.getItem('current_task_id') || currentJobDetails) {
-                console.warn(`[Tab ${tabId.substring(0, 4)}] Received a job but is already busy (Task ID or cached details present). Ignoring.`);
+            if (sessionStorage.getItem('current_task_id')) {
+                console.warn(`[Tab ${tabId.substring(0, 4)}] Received a job but is already busy. Ignoring.`);
                 return;
             }
 
-            // 关键改进：在提交占位符之前，先获取并缓存任务详情
-
-            console.log(`[Tab ${tabId.substring(0, 4)}] Fetching job details from server...`);
-            try {
-                const serverResponse = await fetch(`${SERVER_URL}/get_messages_job?tab_id=${tabId}`);
-                const data = await serverResponse.json();
-
-                if (data.status === 'success' && data.job) {
-                    console.log(`[Tab ${tabId.substring(0, 4)}] Job details fetched and cached. Proceeding to submit placeholder.`);
-                    currentJobDetails = data.job; // 缓存详情
-                    sessionStorage.setItem('current_task_id', data.job.task_id);
-
-                    // 现在提交占位符，这将触发 hookFetch
-                    if (job.type === 'prompt') {
-                        await typeAndSubmitPrompt(job.prompt);
-                    } else {
-                        console.warn(`[Tab ${tabId.substring(0, 4)}] Received unknown job type: ${job.type}`);
-                    }
-                } else {
-                    console.error(`[Tab ${tabId.substring(0, 4)}] ERROR: Received new_job via SSE, but failed to fetch details from /get_messages_job. Status: ${data.status}`);
-                    // 清理状态以允许重试或新任务
-                    currentJobDetails = null;
-                    sessionStorage.removeItem('current_task_id');
-                }
-            } catch (e) {
-                console.error(`[Tab ${tabId.substring(0, 4)}] CRITICAL ERROR fetching job details after SSE trigger:`, e);
-                // 清理状态
-                currentJobDetails = null;
-                sessionStorage.removeItem('current_task_id');
+            sessionStorage.setItem('current_task_id', job.task_id);
+            if (job.type === 'prompt') {
+                await typeAndSubmitPrompt(job.prompt);
+            } else if (job.type === 'messages') {
+                console.log(`[Tab ${tabId.substring(0, 4)}] Handling 'messages' job. Waiting for trigger...`);
             }
         });
 
