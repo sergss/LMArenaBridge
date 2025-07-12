@@ -641,120 +641,144 @@ def cleanup_and_dispatch_thread():
     global HANGING_TAB_ID, NEXT_HANGING_JOB_TIME
 
     while True:
-        time.sleep(2) # Run every 2 seconds for high responsiveness
-        
-        # 读取配置，确保是最新的
-        enable_hanging = CONFIG.get("enable_anti_bot_hanging", False)
-        hanging_interval = CONFIG.get("hanging_interval_seconds", 120)
+        try:
+            time.sleep(2)  # Run every 2 seconds for high responsiveness
 
-        with SESSION_LOCK:
-            # --- 1. Active Ping & Cleanup Phase ---
-            zombie_tabs = []
-            active_sessions = list(TAB_SESSIONS.items())
-            
-            for tab_id, session in active_sessions:
-                try:
-                    if session['sse_queue']:
-                        session['sse_queue'].put_nowait(": ping\n\n")
-                except (AttributeError, Exception):
-                    zombie_tabs.append(tab_id)
+            # 读取配置，确保是最新的
+            enable_hanging = CONFIG.get("enable_anti_bot_hanging", False)
+            hanging_interval = CONFIG.get("hanging_interval_seconds", 120)
 
-            for tab_id in zombie_tabs:
-                logger.warning(f"调度器：通过Ping检测到僵尸会话: {tab_id[:8]}，正在清理。")
-                session = TAB_SESSIONS.pop(tab_id, None)
-                
-                if tab_id == HANGING_TAB_ID:
-                    logger.info("调度器：挂机标签页已断开，将重新选择。")
-                    HANGING_TAB_ID = None
-                
-                if session and session.get('status') == 'busy' and session.get('job'):
-                    if not session['job'].get("is_hanging_job"):
-                        requeued_job = session['job']
-                        PENDING_JOBS.put(requeued_job)
-                        logger.warning(f"调度器：来自僵尸会话的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
+            with SESSION_LOCK:
+                # --- 0. 状态诊断 ---
+                num_pending = PENDING_JOBS.qsize()
+                num_sessions = len(TAB_SESSIONS)
+                idle_sessions = [sid[:8] for sid, s in TAB_SESSIONS.items() if s.get('status') == 'idle']
+                # 仅在有任务或有挂机活动时记录心跳，以减少噪音
+                if num_pending > 0 or (enable_hanging and num_sessions > 0):
+                    logger.info(f"调度器心跳: {num_pending}个待处理, {num_sessions}个会话 (空闲: {idle_sessions if idle_sessions else '无'}), 挂机池: {HANGING_TAB_ID[:8] if HANGING_TAB_ID else '无'}")
+
+                # --- 1. Active Ping & Cleanup Phase ---
+                zombie_tabs = []
+                active_sessions = list(TAB_SESSIONS.items())
+
+                for tab_id, session in active_sessions:
+                    # 标记僵尸会话的条件:
+                    # 1. SSE队列不存在 (客户端已正常断开)
+                    # 2. Ping失败 (客户端异常断开)
+                    is_zombie = False
+                    if not session.get('sse_queue'):
+                        is_zombie = True
                     else:
-                        logger.info(f"调度器：丢弃来自僵尸会话的挂机任务 {session['task_id'][:8]}。")
-
-            # --- 2. Anti-Bot Hanging Management Phase ---
-            previous_hanging_id = HANGING_TAB_ID
-            
-            if enable_hanging and len(TAB_SESSIONS) >= 2:
-                if HANGING_TAB_ID is None or HANGING_TAB_ID not in TAB_SESSIONS:
-                    # 优先选择那些报告自己是挂机状态的标签页
-                    preferred_tabs = [tid for tid, s in TAB_SESSIONS.items() if s.get('is_hanging_client')]
+                        try:
+                            session['sse_queue'].put_nowait(": ping\n\n")
+                        except Exception:
+                            is_zombie = True
                     
-                    if preferred_tabs:
-                        HANGING_TAB_ID = random.choice(preferred_tabs)
-                        logger.info(f"调度器：已从 {len(preferred_tabs)} 个前挂机标签页中，重新选择 {HANGING_TAB_ID[:8]} 作为挂机池。")
-                    else:
-                        # 如果没有，则从所有可用标签页中随机选择
-                        available_tabs = list(TAB_SESSIONS.keys())
-                        if available_tabs:
-                            HANGING_TAB_ID = random.choice(available_tabs)
-                            logger.info(f"调度器：没有找到前挂机标签页，已随机选择新标签页 {HANGING_TAB_ID[:8]} 作为挂机池。")
-                    
-                    if HANGING_TAB_ID:
-                        NEXT_HANGING_JOB_TIME = time.time()
-            else:
-                if HANGING_TAB_ID is not None:
-                     logger.info(f"调度器：因条件不满足（启用: {enable_hanging}, 标签页数: {len(TAB_SESSIONS)}），取消挂机模式。")
-                HANGING_TAB_ID = None
+                    if is_zombie:
+                        zombie_tabs.append(tab_id)
 
-            # --- 状态变更通知 ---
-            if previous_hanging_id != HANGING_TAB_ID:
-                # 通知旧的挂机标签页取消状态
-                if previous_hanging_id and previous_hanging_id in TAB_SESSIONS:
-                    try:
-                        TAB_SESSIONS[previous_hanging_id]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': False})}\n\n")
-                        logger.info(f"通知标签页 {previous_hanging_id[:8]} 已取消挂机状态。")
-                    except Exception: pass
-                # 通知新的挂机标签页设置状态
-                if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS:
-                    try:
-                        TAB_SESSIONS[HANGING_TAB_ID]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': True})}\n\n")
-                        logger.info(f"通知标签页 {HANGING_TAB_ID[:8]} 已设为挂机状态。")
-                    except Exception: pass
+                if zombie_tabs:
+                    logger.warning(f"调度器：检测到 {len(zombie_tabs)} 个僵尸会话: {[tid[:8] for tid in zombie_tabs]}，正在清理。")
+                    for tab_id in zombie_tabs:
+                        session = TAB_SESSIONS.pop(tab_id, None)
+                        
+                        if tab_id == HANGING_TAB_ID:
+                            logger.info(f"调度器：挂机标签页 {tab_id[:8]} 是僵尸，正在重置。")
+                            HANGING_TAB_ID = None
+                        
+                        if session and session.get('status') == 'busy' and session.get('job'):
+                            if not session['job'].get("is_hanging_job"):
+                                requeued_job = session['job']
+                                PENDING_JOBS.put(requeued_job)
+                                logger.warning(f"调度器：来自僵尸会话 {tab_id[:8]} 的任务 {requeued_job['task_id'][:8]} 已被重新排队。")
+                            else:
+                                logger.info(f"调度器：丢弃来自僵尸会话 {tab_id[:8]} 的挂机任务 {session['task_id'][:8]}。")
 
+                # --- 2. Anti-Bot Hanging Management Phase ---
+                previous_hanging_id = HANGING_TAB_ID
 
-            # --- 3. Hanging Job Creation Phase ---
-            if enable_hanging and HANGING_TAB_ID:
-                current_time = time.time()
-                has_pending_hanging_job = any(job.get('is_hanging_job') for job in list(PENDING_JOBS.queue))
-                
-                if current_time >= NEXT_HANGING_JOB_TIME and not has_pending_hanging_job:
-                    if CONFIG.get("log_hanging_pool_activity", True):
-                        logger.info(f"调度器：创建新的挂机任务并放入队列。")
-                    hanging_job_package = create_hanging_job_package()
-                    PENDING_JOBS.put(hanging_job_package)
-                    NEXT_HANGING_JOB_TIME = current_time + hanging_interval
+                if enable_hanging and len(TAB_SESSIONS) >= 2:
+                    if HANGING_TAB_ID is None or HANGING_TAB_ID not in TAB_SESSIONS:
+                        # 优先选择那些报告自己是挂机状态的标签页
+                        preferred_tabs = [tid for tid, s in TAB_SESSIONS.items() if s.get('is_hanging_client')]
 
-            # --- 4. Dispatch Phase ---
-            if not PENDING_JOBS.empty():
-                job_package = PENDING_JOBS.queue[0]
-                is_hanging = job_package.get("is_hanging_job", False)
-                
-                target_session_id = None
-                
-                if is_hanging:
-                    if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
-                        target_session_id = HANGING_TAB_ID
+                        if preferred_tabs:
+                            HANGING_TAB_ID = random.choice(preferred_tabs)
+                            logger.info(f"调度器：已从 {len(preferred_tabs)} 个前挂机标签页中，重新选择 {HANGING_TAB_ID[:8]} 作为挂机池。")
+                        else:
+                            # 如果没有，则从所有可用标签页中随机选择
+                            available_tabs = list(TAB_SESSIONS.keys())
+                            if available_tabs:
+                                HANGING_TAB_ID = random.choice(available_tabs)
+                                logger.info(f"调度器：没有找到前挂机标签页，已随机选择新标签页 {HANGING_TAB_ID[:8]} 作为挂机池。")
+
+                        if HANGING_TAB_ID:
+                            NEXT_HANGING_JOB_TIME = time.time()
                 else:
-                    idle_non_hanging_sessions = {
-                        tid: s for tid, s in TAB_SESSIONS.items()
-                        if s.get('status') == 'idle' and tid != HANGING_TAB_ID
-                    }
-                    if idle_non_hanging_sessions:
-                        target_session_id = list(idle_non_hanging_sessions.keys())[0]
-                    elif HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
-                        target_session_id = HANGING_TAB_ID
+                    if HANGING_TAB_ID is not None:
+                         logger.info(f"调度器：因条件不满足（启用: {enable_hanging}, 标签页数: {len(TAB_SESSIONS)}），取消挂机模式。")
+                    HANGING_TAB_ID = None
 
-                if target_session_id:
-                    job_to_dispatch = PENDING_JOBS.get()
-                    session = TAB_SESSIONS[target_session_id]
-                    dispatch_job(target_session_id, session, job_to_dispatch)
-                    if not is_hanging and target_session_id == HANGING_TAB_ID:
-                        NEXT_HANGING_JOB_TIME = time.time() + hanging_interval
-                        logger.info(f"挂机标签页被用于执行普通任务，下一次挂机任务推迟。")
+                # --- 状态变更通知 ---
+                if previous_hanging_id != HANGING_TAB_ID:
+                    # 通知旧的挂机标签页取消状态
+                    if previous_hanging_id and previous_hanging_id in TAB_SESSIONS:
+                        try:
+                            TAB_SESSIONS[previous_hanging_id]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': False})}\n\n")
+                            logger.info(f"通知标签页 {previous_hanging_id[:8]} 已取消挂机状态。")
+                        except Exception: pass
+                    # 通知新的挂机标签页设置状态
+                    if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS:
+                        try:
+                            TAB_SESSIONS[HANGING_TAB_ID]['sse_queue'].put(f"event: set_hanging_status\ndata: {json.dumps({'is_hanging': True})}\n\n")
+                            logger.info(f"通知标签页 {HANGING_TAB_ID[:8]} 已设为挂机状态。")
+                        except Exception: pass
+
+
+                # --- 3. Hanging Job Creation Phase ---
+                if enable_hanging and HANGING_TAB_ID:
+                    current_time = time.time()
+                    has_pending_hanging_job = any(job.get('is_hanging_job') for job in list(PENDING_JOBS.queue))
+
+                    if current_time >= NEXT_HANGING_JOB_TIME and not has_pending_hanging_job:
+                        if CONFIG.get("log_hanging_pool_activity", True):
+                            logger.info(f"调度器：创建新的挂机任务并放入队列。")
+                        hanging_job_package = create_hanging_job_package()
+                        PENDING_JOBS.put(hanging_job_package)
+                        NEXT_HANGING_JOB_TIME = current_time + hanging_interval
+
+                # --- 4. Dispatch Phase ---
+                if not PENDING_JOBS.empty():
+                    job_package = PENDING_JOBS.queue[0]
+                    is_hanging = job_package.get("is_hanging_job", False)
+
+                    target_session_id = None
+
+                    if is_hanging:
+                        if HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                            target_session_id = HANGING_TAB_ID
+                    else:
+                        idle_non_hanging_sessions = {
+                            tid: s for tid, s in TAB_SESSIONS.items()
+                            if s.get('status') == 'idle' and tid != HANGING_TAB_ID
+                        }
+                        if idle_non_hanging_sessions:
+                            target_session_id = list(idle_non_hanging_sessions.keys())[0]
+                        elif HANGING_TAB_ID and HANGING_TAB_ID in TAB_SESSIONS and TAB_SESSIONS[HANGING_TAB_ID].get('status') == 'idle':
+                            target_session_id = HANGING_TAB_ID
+
+                    if target_session_id:
+                        job_to_dispatch = PENDING_JOBS.get()
+                        session = TAB_SESSIONS[target_session_id]
+                        dispatch_job(target_session_id, session, job_to_dispatch)
+                        if not is_hanging and target_session_id == HANGING_TAB_ID:
+                            NEXT_HANGING_JOB_TIME = time.time() + hanging_interval
+                            logger.info(f"挂机标签页被用于执行普通任务，下一次挂机任务推迟。")
+
+        except Exception:
+            logger.error("调度器后台线程发生致命错误！将会在10秒后重试。", exc_info=True)
+            # To prevent a fast spinning loop of death if the error is persistent
+            time.sleep(10)
 
 def dispatch_job(tab_id, session, job_package):
     """辅助函数，用于将任务发送到指定的标签页会话。"""

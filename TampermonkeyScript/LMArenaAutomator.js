@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMArena Automator
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5
+// @version      1.6.6
 // @description  Injects history with robust, buffered comprehensive logging and error reporting.
 // @author       Lianues
 // @updateURL    https://raw.githubusercontent.com/Lianues/LMArenaBridge/main/TampermonkeyScript/LMArenaAutomator.js
