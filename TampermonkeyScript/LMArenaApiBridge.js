@@ -17,6 +17,7 @@
     // --- 配置 ---
     const SERVER_URL = "ws://localhost:5102/ws"; // 与 api_server.py 中的端口匹配
     let socket;
+    let isCaptureModeActive = false; // ID捕获模式的开关
 
     // --- 核心逻辑 ---
     function connect() {
@@ -38,6 +39,11 @@
                     if (message.command === 'refresh') {
                         console.log("[API Bridge] 正在执行页面刷新...");
                         location.reload();
+                    } else if (message.command === 'activate_id_capture') {
+                        console.log("[API Bridge] ✅ ID 捕获模式已激活。请在页面上触发一次 'Retry' 操作。");
+                        isCaptureModeActive = true;
+                        // 可以选择性地给用户一个视觉提示
+                        document.title = "🎯 " + document.title;
                     }
                     return;
                 }
@@ -118,7 +124,8 @@
                 experimental_attachments: [],
                 failureReason: null,
                 metadata: null,
-                participantPosition: "a",
+                // 使用从后端 payload 的 message_templates 中传递过来的 participantPosition
+                participantPosition: template.participantPosition || "a",
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 status: status,
@@ -133,6 +140,8 @@
 
         console.log("[API Bridge] 准备发送到 LMArena API 的最终载荷:", JSON.stringify(body, null, 2));
 
+        // 设置一个标志，让我们的 fetch 拦截器知道这个请求是脚本自己发起的
+        window.isApiBridgeRequest = true;
         try {
             const response = await fetch(apiUrl, {
                 method: 'PUT', // 'retry' 端点使用 PUT 方法
@@ -168,6 +177,9 @@
             console.error(`[API Bridge] ❌ 在为请求 ${requestId.substring(0, 8)} 执行 fetch 时出错:`, error);
             sendToServer(requestId, { error: error.message });
             sendToServer(requestId, "[DONE]");
+        } finally {
+            // 请求结束后，无论成功与否，都重置标志
+            window.isApiBridgeRequest = false;
         }
     }
 
@@ -202,22 +214,32 @@
         if (urlString) {
             const match = urlString.match(/\/api\/stream\/retry-evaluation-session-message\/([a-f0-9-]+)\/messages\/([a-f0-9-]+)/);
 
-            if (match) {
+            // 仅在请求不是由API桥自身发起，且捕获模式已激活时，才更新ID
+            if (match && !window.isApiBridgeRequest && isCaptureModeActive) {
                 const sessionId = match[1];
                 const messageId = match[2];
-                console.log(`[API Bridge Interceptor] 在 ${window.location.hostname} 捕获到 LMArena 请求！`);
-                console.log(`  - Session ID: ${sessionId}`);
-                console.log(`  - Message ID: ${messageId}`);
+                console.log(`[API Bridge Interceptor] 🎯 在激活模式下捕获到ID！正在发送...`);
+
+                // 关闭捕获模式，确保只发送一次
+                isCaptureModeActive = false;
+                if (document.title.startsWith("🎯 ")) {
+                    document.title = document.title.substring(2);
+                }
 
                 // 异步将捕获到的ID发送到本地的 id_updater.py 脚本
                 fetch('http://127.0.0.1:5103/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: sessionId,
-                        messageId: messageId
-                    })
-                }).catch(err => console.error('[API Bridge] 发送ID更新时出错:', err));
+                    body: JSON.stringify({ sessionId, messageId })
+                })
+                .then(response => {
+                    if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+                    console.log(`[API Bridge] ✅ ID 更新成功发送。捕获模式已自动关闭。`);
+                })
+                .catch(err => {
+                    console.error('[API Bridge] 发送ID更新时出错:', err.message);
+                    // 即使发送失败，捕获模式也已关闭，不会重试。
+                });
             }
         }
 

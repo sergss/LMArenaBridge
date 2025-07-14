@@ -270,6 +270,17 @@ def compare_and_update_models(new_models_list, models_path):
 async def lifespan(app: FastAPI):
     """在服务器启动时运行的生命周期函数。"""
     load_config() # 首先加载配置
+    
+    # --- 打印当前的操作模式 ---
+    mode = CONFIG.get("id_updater_last_mode", "direct_chat")
+    target = CONFIG.get("id_updater_battle_target", "A")
+    logger.info("="*60)
+    logger.info(f"  当前操作模式: {mode.upper()}")
+    if mode == 'battle':
+        logger.info(f"  - Battle 模式目标: Assistant {target}")
+    logger.info("  (可通过运行 id_updater.py 修改模式)")
+    logger.info("="*60)
+
     check_for_updates() # 检查程序更新
     load_model_map() # 加载模型映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
@@ -338,7 +349,7 @@ def _normalize_message_content(message: dict) -> dict:
 
 def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, message_id: str) -> dict:
     """
-    将 OpenAI 请求体转换为油猴脚本所需的简化载荷，并应用酒馆模式和绕过模式。
+    将 OpenAI 请求体转换为油猴脚本所需的简化载荷，并应用酒馆模式、绕过模式以及对战模式。
     """
     # 1. 规范化所有消息
     normalized_messages = [_normalize_message_content(msg.copy()) for msg in openai_data.get("messages", [])]
@@ -368,8 +379,25 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
 
     # 5. 应用绕过模式 (Bypass Mode)
     if CONFIG.get("bypass_enabled"):
-        message_templates.append({"role": "user", "content": " "})
-    
+        # 绕过模式总是添加一个 position 'a' 的用户消息
+        message_templates.append({"role": "user", "content": " ", "participantPosition": "a"})
+
+    # 6. 应用参与者位置 (Participant Position)
+    mode = CONFIG.get("id_updater_last_mode", "direct_chat")
+    target_participant = CONFIG.get("id_updater_battle_target", "A").lower()
+    logger.info(f"正在根据模式 '{mode}' 设置 Participant Positions...")
+
+    for msg in message_templates:
+        if msg['role'] == 'system':
+            # 最终规则：无论何种模式，system 角色的 position 始终固定为 'b'
+            msg['participantPosition'] = 'b'
+        elif mode == 'battle':
+            # Battle 模式下，非 system 消息使用用户选择的目标 participant
+            msg['participantPosition'] = target_participant
+        else: # DirectChat 模式
+            # DirectChat 模式下，非 system 消息使用默认的 'a'
+            msg['participantPosition'] = 'a'
+
     return {
         "message_templates": message_templates,
         "target_model_id": target_model_id,
@@ -512,22 +540,25 @@ async def stream_generator(request_id: str, model: str):
     response_id = f"chatcmpl-{uuid.uuid4()}"
     logger.info(f"STREAMER [ID: {request_id[:8]}]: 流式生成器启动。")
     
+    finish_reason_to_send = 'stop'  # 默认的结束原因
+
     async for event_type, data in _process_lmarena_stream(request_id):
         if event_type == 'content':
             yield format_openai_chunk(data, model, response_id)
         elif event_type == 'finish':
+            # 记录结束原因，但不要立即返回，等待浏览器发送 [DONE]
+            finish_reason_to_send = data
             if data == 'content-filter':
                 warning_msg = "\n\n响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因"
                 yield format_openai_chunk(warning_msg, model, response_id)
-            yield format_openai_finish_chunk(model, response_id, reason=data)
-            return
         elif event_type == 'error':
             logger.error(f"STREAMER [ID: {request_id[:8]}]: 流中发生错误: {data}")
             yield format_openai_error_chunk(str(data), model, response_id)
             yield format_openai_finish_chunk(model, response_id, reason='stop')
-            return
-    
-    yield format_openai_finish_chunk(model, response_id, reason='stop')
+            return # 发生错误时，可以立即终止
+
+    # 只有在 _process_lmarena_stream 自然结束后 (即收到 [DONE]) 才执行
+    yield format_openai_finish_chunk(model, response_id, reason=finish_reason_to_send)
     logger.info(f"STREAMER [ID: {request_id[:8]}]: 流式生成器正常结束。")
 
 async def non_stream_response(request_id: str, model: str):
@@ -545,7 +576,7 @@ async def non_stream_response(request_id: str, model: str):
             finish_reason = data
             if data == 'content-filter':
                 full_content.append("\n\n响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因")
-            break
+            # 不要在这里 break，继续等待来自浏览器的 [DONE] 信号，以避免竞态条件
         elif event_type == 'error':
             logger.error(f"NON-STREAM [ID: {request_id[:8]}]: 处理时发生错误: {data}")
             error_response = {
@@ -739,6 +770,27 @@ async def chat_completions(request: Request):
             del response_channels[request_id]
         logger.error(f"API CALL [ID: {request_id[:8]}]: 处理请求时发生致命错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- 内部通信端点 ---
+@app.post("/internal/start_id_capture")
+async def start_id_capture():
+    """
+    接收来自 id_updater.py 的通知，并通过 WebSocket 指令
+    激活油猴脚本的 ID 捕获模式。
+    """
+    if not browser_ws:
+        logger.warning("ID CAPTURE: 收到激活请求，但没有浏览器连接。")
+        raise HTTPException(status_code=503, detail="Browser client not connected.")
+    
+    try:
+        logger.info("ID CAPTURE: 收到激活请求，正在通过 WebSocket 发送指令...")
+        await browser_ws.send_text(json.dumps({"command": "activate_id_capture"}))
+        logger.info("ID CAPTURE: 激活指令已成功发送。")
+        return JSONResponse({"status": "success", "message": "Activation command sent."})
+    except Exception as e:
+        logger.error(f"ID CAPTURE: 发送激活指令时出错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send command via WebSocket.")
+
 
 # --- 主程序入口 ---
 if __name__ == "__main__":
