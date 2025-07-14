@@ -460,7 +460,7 @@ async def _process_lmarena_stream(request_id: str):
         return
 
     buffer = ""
-    timeout = CONFIG.get("stream_response_timeout_seconds", 120)
+    timeout = CONFIG.get("stream_response_timeout_seconds",360)
     text_pattern = re.compile(r'[ab]0:"((?:\\.|[^"\\])*)"')
     finish_pattern = re.compile(r'[ab]d:(\{.*?"finishReason".*?\})')
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
