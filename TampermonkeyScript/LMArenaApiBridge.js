@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMArena API Bridge
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.2
 // @description  Bridges LMArena to a local API server via WebSocket for streamlined automation.
 // @author       Lianues
 // @match        https://lmarena.ai/*
