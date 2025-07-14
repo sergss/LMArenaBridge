@@ -198,16 +198,37 @@
     // --- 网络请求拦截 ---
     const originalFetch = window.fetch;
     window.fetch = function(...args) {
-        const urlArg = args[0];
+        let [urlArg, options] = args;
         let urlString = '';
 
-        // 确保我们总是处理字符串形式的 URL
+        // --- 新增：CORS 跨域修复逻辑 ---
+        const currentHostname = window.location.hostname;
+        const mainHostname = 'lmarena.ai';
+
         if (urlArg instanceof Request) {
             urlString = urlArg.url;
         } else if (urlArg instanceof URL) {
             urlString = urlArg.href;
         } else if (typeof urlArg === 'string') {
             urlString = urlArg;
+        }
+
+        // 检查是否是从 canary 指向主站的跨域请求
+        if (currentHostname.includes('canary') && urlString.includes(`https://${mainHostname}`)) {
+            const newUrlString = urlString.replace(`https://${mainHostname}`, `https://${currentHostname}`);
+            console.log(`[API Bridge | CORS Fix] 检测到跨域请求，已自动重写 URL:`);
+            console.log(`  - 原 URL: ${urlString}`);
+            console.log(`  - 新 URL: ${newUrlString}`);
+
+            // 根据参数类型更新请求参数
+            if (urlArg instanceof Request) {
+                // Request 对象是不可变的，需要用新的 URL 创建一个副本
+                args[0] = new Request(newUrlString, urlArg);
+            } else {
+                args[0] = newUrlString;
+            }
+            // 更新 urlString 供后续逻辑使用
+            urlString = newUrlString;
         }
 
         // 仅在 URL 是有效字符串时才进行匹配
