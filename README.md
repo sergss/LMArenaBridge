@@ -41,27 +41,7 @@
     3.  将 [`TampermonkeyScript/LMArenaApiBridge.js`](TampermonkeyScript/LMArenaApiBridge.js) 文件中的所有代码复制并粘贴到编辑器中。
     4.  保存脚本。
 
-### 2. 首次配置：获取会话 ID
-
-这是**最重要**的一步。你需要获取一个有效的会话 ID 和消息 ID，以便程序能够正确地与 LMArena API 通信。
-
-1.  **启动 ID 更新器**
-    在项目根目录下，运行 `id_updater.py` 脚本：
-    ```bash
-    python id_updater.py
-    ```
-    你会看到它在 `http://127.0.0.1:5103` 上启动了一个临时的监听服务。
-
-2.  **捕获 ID**
-    *   在浏览器中打开一个 LMArena 竞技场的 **目标模型发送给消息的页面**。请注意，如果是Battle页面，请不要查看模型名称，保持匿名状态，并保证当前消息界面的最后一条是目标模型的一个回答；如果是Direct Chat，请保证当前消息界面的最后一条是目标模型的一个回答。
-    *   **点击目标模型的回答卡片右上角的重试（Retry）按钮**。
-    *   此时，油猴脚本会自动捕获到网络请求中的 `sessionId` 和 `messageId`，并将其发送给正在运行的 `id_updater.py`。
-
-3.  **验证结果**
-    *   回到你的终端，你会看到 `id_updater.py` 打印出成功捕获到的 ID，并提示已将其写入 `config.jsonc` 文件。
-    *   脚本在成功后会自动关闭。现在你的配置已完成！
-
-### 3. 运行主程序
+### 2. 运行主程序
 
 1.  **启动本地服务器**
     在项目根目录下，运行主服务程序：
@@ -72,6 +52,31 @@
 
 2.  **保持 LMArena 页面开启**
     确保你至少有一个 LMArena 页面是打开的，并且油猴脚本已成功连接到本地服务器（页面标题会以 `✅` 开头）。这里无需保持在对话页面，只要是域名下的页面都可以LeaderBoard都可以。
+
+### 3. 配置会话 ID (需要时)
+
+这是**最重要**的一步。你需要获取一个有效的会话 ID 和消息 ID，以便程序能够正确地与 LMArena API 通信。
+
+1.  **确保主服务器正在运行**
+    `api_server.py` 必须处于运行状态，因为 ID 更新器需要通过它来激活浏览器的捕获功能。
+
+2.  **运行 ID 更新器**
+    打开**一个新的终端**，在项目根目录下运行 `id_updater.py` 脚本：
+    ```bash
+    python id_updater.py
+    ```
+    *   脚本会提示你选择模式 (DirectChat / Battle)。
+    *   选择后，它会通知正在运行的主服务器。
+
+3.  **激活与捕获**
+    *   此时，你应该会看到浏览器中 LMArena 页面的标题栏最前面出现了一个准星图标 (🎯)，这表示**ID捕获模式已激活**。
+    *   在浏览器中打开一个 LMArena 竞技场的 **目标模型发送给消息的页面**。请注意，如果是Battle页面，请不要查看模型名称，保持匿名状态，并保证当前消息界面的最后一条是目标模型的一个回答；如果是Direct Chat，请保证当前消息界面的最后一条是目标模型的一个回答。
+    *   **点击目标模型的回答卡片右上角的重试（Retry）按钮**。
+    *   油猴脚本会捕获到 `sessionId` 和 `messageId`，并将其发送给 `id_updater.py`。
+
+4.  **验证结果**
+    *   回到你运行 `id_updater.py` 的终端，你会看到它打印出成功捕获到的 ID，并提示已将其写入 `config.jsonc` 文件。
+    *   脚本在成功后会自动关闭。现在你的配置已完成！
 
 3.  **配置你的 OpenAI 客户端**
     将你的客户端或应用的 OpenAI API 地址指向本地服务器：
@@ -90,24 +95,31 @@
 sequenceDiagram
     participant C as OpenAI 客户端 💻
     participant S as 本地 FastAPI 服务器 🐍
+    participant U as ID 更新脚本 (id_updater.py) 🆔
     participant T as 油猴脚本 🐵 (在 LMArena 页面)
     participant L as LMArena.ai 🌐
 
-    T->>+S: 建立 WebSocket 连接
-    S-->>-T: 确认连接
+    alt 初始化与ID更新
+        T->>+S: (页面加载) 建立 WebSocket 连接
+        S-->>-T: 确认连接
+        U->>+S: (用户运行) POST /internal/start_id_capture
+        S->>T: (WebSocket) 发送 'activate_id_capture' 指令
+        Note right of T: 捕获模式已激活 (一次性)
+        T->>L: (用户点击Retry) 拦截到 fetch 请求
+        T->>U: (HTTP) 发送捕获到的ID
+        U-->>T: 确认
+        U->>U: 更新 config.jsonc
+    end
 
-    C->>+S: 发送 /v1/chat/completions 请求
-    S->>S: 生成唯一的 request_id
-    S->>S: 转换请求为 LMArena 格式
-    S->>T: (WebSocket) 发送包含 request_id 和载荷的消息
-    
-    T->>T: (收到消息后) 准备并执行 fetch 操作
-    T->>L: (fetch) 发送真实请求到 LMArena API
-    L-->>T: (流式)返回模型响应
-    
-    T->>S: (WebSocket) 将响应数据块一块块发回，并附上 request_id
-    S->>S: (根据 request_id) 将数据块放入对应的响应通道
-    S-->>-C: (流式) 从通道中取出数据并返回 OpenAI 格式的响应
+    alt 正常聊天流程
+        C->>+S: (用户聊天) /v1/chat/completions 请求
+        S->>S: 转换请求为 LMArena 格式
+        S->>T: (WebSocket) 发送包含 request_id 和载荷的消息
+        T->>L: (fetch) 发送真实请求到 LMArena API
+        L-->>T: (流式)返回模型响应
+        T->>S: (WebSocket) 将响应数据块一块块发回
+        S-->>-C: (流式) 返回 OpenAI 格式的响应
+    end
 ```
 
 1.  **建立连接**: 当你在浏览器中打开 LMArena 页面时，**油猴脚本**会立即与**本地 FastAPI 服务器**建立一个持久的 **WebSocket 连接**。
