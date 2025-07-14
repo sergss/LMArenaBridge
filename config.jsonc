@@ -6,11 +6,11 @@
   // --- 会话设置 ---
   // 当前 LMArena 页面的会话 ID。
   // 通过调用 /api/v1/session/update 端点可以自动更新。
-  "session_id": "bc2ad58f-54fb-4ce0-8846-07335dfc67a6",
+  "session_id": "aacd946f-2e40-43be-bda8-db726997d518",
 
   // 当前会话的最后一条消息 ID。
   // 通过调用 /api/v1/session/update 端点可以自动更新。
-  "message_id": "fd7e33ec-4dde-44d5-982a-326cb4a5d1e7",
+  "message_id": "90a60aaf-d81a-4214-ac76-fe23ddec2160",
 
   // --- 更新设置 ---
   // 开关：自动检查更新

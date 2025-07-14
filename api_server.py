@@ -447,8 +447,21 @@ async def _process_lmarena_stream(request_id: str):
                 yield 'error', f'Response timed out after {timeout} seconds.'
                 return
 
+            # 1. 检查来自 WebSocket 端的直接错误或终止信号
             if isinstance(raw_data, dict) and 'error' in raw_data:
-                yield 'error', raw_data.get('error', 'Unknown browser error')
+                error_msg = raw_data.get('error', 'Unknown browser error')
+                # 增强：检查错误消息本身是否包含Cloudflare页面
+                if isinstance(error_msg, str) and any(re.search(p, error_msg, re.IGNORECASE) for p in cloudflare_patterns):
+                    friendly_error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
+                    if browser_ws:
+                        try:
+                            await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
+                            logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 在错误消息中检测到CF并已发送刷新指令。")
+                        except Exception as e:
+                            logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
+                    yield 'error', friendly_error_msg
+                else:
+                    yield 'error', error_msg
                 return
             if raw_data == "[DONE]":
                 break
