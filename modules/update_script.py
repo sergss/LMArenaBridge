@@ -19,6 +19,21 @@ def load_jsonc_values(path):
         print(f"加载或解析 {path} 的值时出错: {e}")
         return None
 
+def get_all_relative_paths(directory):
+    """获取一个目录下所有文件和空文件夹的相对路径集合。"""
+    paths = set()
+    for root, dirs, files in os.walk(directory):
+        # 添加文件
+        for name in files:
+            path = os.path.join(root, name)
+            paths.add(os.path.relpath(path, directory))
+        # 添加空文件夹
+        for name in dirs:
+            dir_path = os.path.join(root, name)
+            if not os.listdir(dir_path):
+                paths.add(os.path.relpath(dir_path, directory) + os.sep)
+    return paths
+
 def main():
     print("--- 更新脚本已启动 ---")
     
@@ -27,9 +42,11 @@ def main():
     time.sleep(3)
     
     # 2. 定义路径
-    source_dir_inner = os.path.join("update_temp", "LMArenaBridge-main")
     destination_dir = os.getcwd()
+    update_dir = "update_temp"
+    source_dir_inner = os.path.join(update_dir, "LMArenaBridge-main")
     config_filename = 'config.jsonc'
+    models_filename = 'models.json'
     
     if not os.path.exists(source_dir_inner):
         print(f"错误：找不到源目录 {source_dir_inner}。更新失败。")
@@ -38,28 +55,63 @@ def main():
     print(f"源目录: {os.path.abspath(source_dir_inner)}")
     print(f"目标目录: {os.path.abspath(destination_dir)}")
 
-    # 3. 备份旧的用户配置值
-    print("正在备份当前配置值...")
+    # 3. 备份关键文件
+    print("正在备份当前配置和模型文件...")
     old_config_path = os.path.join(destination_dir, config_filename)
+    old_models_path = os.path.join(destination_dir, models_filename)
     old_config_values = load_jsonc_values(old_config_path)
-    if old_config_values:
-        print("配置值备份成功。")
-    else:
-        print("警告：无法加载当前配置值，用户的设置可能不会被保留。")
+    
+    # 4. 确定要保留的文件和文件夹
+    # 保留 update_temp 自身, .git 目录, 和任何用户可能添加的隐藏文件/文件夹
+    preserved_items = {update_dir, ".git", ".github"}
 
-    # 4. 复制新文件（除配置文件外）
-    print("正在复制新文件...")
+    # 5. 获取新旧文件列表
+    new_files = get_all_relative_paths(source_dir_inner)
+    # 排除 .git 和 .github 目录，因为它们不应该被部署
+    new_files = {f for f in new_files if not (f.startswith('.git') or f.startswith('.github'))}
+
+    current_files = get_all_relative_paths(destination_dir)
+    
+    # 6. 计算需要删除的文件和文件夹
+    # 排除保留项和不受管理的用户文件（例如 venv）
+    files_to_delete = current_files - new_files - {config_filename, models_filename}
+    files_to_delete = {f for f in files_to_delete if f.split(os.sep)[0] not in preserved_items}
+
+    print("\n--- 文件变更分析 ---")
+    if files_to_delete:
+        print("[-] 将删除以下旧文件/文件夹:")
+        for f in sorted(list(files_to_delete)):
+            print(f"  - {f}")
+        
+        for f in sorted(list(files_to_delete), reverse=True): # 从内到外删除
+            try:
+                path_to_delete = os.path.join(destination_dir, f)
+                if os.path.isdir(path_to_delete.rstrip(os.sep)):
+                    shutil.rmtree(path_to_delete)
+                elif os.path.isfile(path_to_delete):
+                    os.remove(path_to_delete)
+            except OSError as e:
+                print(f"删除 {f} 时出错: {e}")
+    else:
+        print("[*] 无需删除任何文件。")
+
+    # 7. 复制新文件（除配置文件外）
+    print("\n[+] 正在复制新文件...")
     try:
         new_config_template_path = os.path.join(source_dir_inner, config_filename)
         
         for item in os.listdir(source_dir_inner):
             s = os.path.join(source_dir_inner, item)
             d = os.path.join(destination_dir, item)
+            
+            # 跳过 .git 和 .github 目录
+            if item in {".git", ".github"}:
+                continue
+            
             if os.path.basename(s) == config_filename:
-                continue # 跳过配置文件
+                continue # 跳过主配置文件，稍后处理
+
             if os.path.isdir(s):
-                if os.path.exists(d):
-                    shutil.rmtree(d)
                 shutil.copytree(s, d, dirs_exist_ok=True)
             else:
                 shutil.copy2(s, d)
@@ -69,68 +121,61 @@ def main():
         print(f"文件复制过程中发生错误: {e}")
         return
 
-    # 5. 智能合并配置（基于文本）
+    # 8. 智能合并配置
     if old_config_values and os.path.exists(new_config_template_path):
-        print("正在智能合并配置（保留注释）...")
+        print("\n[*] 正在智能合并配置（保留注释）...")
         try:
             with open(new_config_template_path, 'r', encoding='utf-8') as f:
                 new_config_content = f.read()
 
-            # 获取新版本号
             new_version_values = load_jsonc_values(new_config_template_path)
             new_version = new_version_values.get("version", "unknown")
-
-            # 始终使用新版本号
             old_config_values["version"] = new_version
 
-            # 基于新模板，替换旧的值
             for key, value in old_config_values.items():
-                # 构建正则表达式来查找键值对并替换值
-                # 这个表达式会寻找 "key": value, 的形式，并处理字符串、布尔值和数字
                 if isinstance(value, str):
                     replacement_value = f'"{value}"'
                 elif isinstance(value, bool):
                     replacement_value = str(value).lower()
-                else: # numbers
+                else:
                     replacement_value = str(value)
                 
-                # 正则表达式：匹配 "key" 后面的冒号，然后是任意空白，最后是值
-                # (?<=")key(?="\s*:) 匹配键
-                # :\s* 匹配冒号和任意空格
-                # (?:".*?"|true|false|[\d\.]+) 匹配值
                 pattern = re.compile(f'("{key}"\s*:\s*)(?:".*?"|true|false|[\d\.]+)')
-                new_config_content = pattern.sub(f'\\g<1>{replacement_value}', new_config_content)
+                if pattern.search(new_config_content):
+                    new_config_content = pattern.sub(f'\\g<1>{replacement_value}', new_config_content)
 
             with open(old_config_path, 'w', encoding='utf-8') as f:
                 f.write(new_config_content)
-            print("配置合并成功，注释和格式已保留。")
+            print("配置合并成功。")
 
         except Exception as e:
             print(f"配置合并过程中发生严重错误: {e}")
     else:
-         # 如果无法进行智能合并，就直接复制新文件
         print("无法进行智能合并，将直接使用新版配置文件。")
-        shutil.copy2(new_config_template_path, old_config_path)
+        if os.path.exists(new_config_template_path):
+            shutil.copy2(new_config_template_path, old_config_path)
 
-
-    # 6. 清理临时文件夹
-    print("正在清理临时文件...")
+    # 9. 清理临时文件夹
+    print("\n[*] 正在清理临时文件...")
     try:
-        shutil.rmtree("update_temp")
+        shutil.rmtree(update_dir)
         print("清理完毕。")
     except Exception as e:
         print(f"清理临时文件时发生错误: {e}")
 
-    # 7. 重启主程序
-    print("正在重启主程序...")
+    # 10. 重启主程序
+    print("\n[*] 正在重启主程序...")
     try:
-        # 使用 sys.executable 确保我们用的是同一个 Python 解释器
-        main_script_path = os.path.join(destination_dir, "local_openai_history_server.py")
+        main_script_path = os.path.join(destination_dir, "api_server.py")
+        if not os.path.exists(main_script_path):
+             print(f"错误: 找不到主程序脚本 {main_script_path}。")
+             return
+        
         subprocess.Popen([sys.executable, main_script_path])
         print("主程序已在后台重新启动。")
     except Exception as e:
         print(f"重启主程序失败: {e}")
-        print("请手动运行 local_openai_history_server.py")
+        print(f"请手动运行 {main_script_path}")
 
     print("--- 更新完成 ---")
 
