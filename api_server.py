@@ -17,7 +17,7 @@ import requests
 from packaging.version import parse as parse_version
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 
 # --- 基础配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -377,166 +377,178 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
         "message_id": message_id
     }
 
-async def stream_generator(request_id: str, model: str):
+# --- OpenAI 格式化辅助函数 (确保JSON序列化稳健) ---
+def format_openai_chunk(content: str, model: str, request_id: str) -> str:
+    """格式化为 OpenAI 流式块。"""
+    chunk = {
+        "id": request_id, "object": "chat.completion.chunk",
+        "created": int(time.time()), "model": model,
+        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+def format_openai_finish_chunk(model: str, request_id: str, reason: str = 'stop') -> str:
+    """格式化为 OpenAI 结束块。"""
+    chunk = {
+        "id": request_id, "object": "chat.completion.chunk",
+        "created": int(time.time()), "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": reason}]
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\ndata: [DONE]\n\n"
+
+def format_openai_error_chunk(error_message: str, model: str, request_id: str) -> str:
+    """格式化为 OpenAI 错误块。"""
+    content = f"\n\n[LMArena Bridge Error]: {error_message}"
+    return format_openai_chunk(content, model, request_id)
+
+def format_openai_non_stream_response(content: str, model: str, request_id: str, reason: str = 'stop') -> dict:
+    """构建符合 OpenAI 规范的非流式响应体。"""
+    return {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": reason,
+        }],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": len(content) // 4,
+            "total_tokens": len(content) // 4,
+        },
+    }
+
+async def _process_lmarena_stream(request_id: str):
     """
-    一个纯粹的消费者生成器。它等待 websocket_endpoint 将数据放入其通道，
-    然后立即处理并将其作为 SSE 事件产生。
-    此版本使用缓冲区和正则表达式来稳健地处理流式数据。
+    核心内部生成器：处理来自浏览器的原始数据流，并产生结构化事件。
+    事件类型: ('content', str), ('finish', str), ('error', str)
     """
-    logging.info(f"STREAMER [ID: {request_id[:8]}]: 生成器已启动，等待数据。")
-    queue = response_channels[request_id]
-    response_id = f"chatcmpl-{uuid.uuid4()}"
-    
-    # --- 正则表达式和缓冲区 ---
+    queue = response_channels.get(request_id)
+    if not queue:
+        logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 无法找到响应通道。")
+        yield 'error', 'Internal server error: response channel not found.'
+        return
+
     buffer = ""
-    # 匹配 a0:"..." 或 b0:"..." 格式的文本块
+    timeout = CONFIG.get("stream_response_timeout_seconds", 120)
     text_pattern = re.compile(r'[ab]0:"((?:\\.|[^"\\])*)"')
-    # 匹配 ad:{...} 或 bd:{...} 格式的结束信号
     finish_pattern = re.compile(r'[ab]d:(\{.*?"finishReason".*?\})')
-    # 匹配 LMArena 返回的通用错误
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
-    # Cloudflare 人机验证页面的特征
-    cloudflare_patterns = [
-        r'<title>Just a moment...</title>',
-        r'Enable JavaScript and cookies to continue'
-    ]
+    cloudflare_patterns = [r'<title>Just a moment...</title>', r'Enable JavaScript and cookies to continue']
 
     try:
         while True:
-            # 等待来自 WebSocket 的数据
-            raw_data = await queue.get()
-
-            # 检查终止信号或错误
-            if isinstance(raw_data, dict) and 'error' in raw_data:
-                error_msg = raw_data.get('error', 'Unknown browser error')
-
-                # 优先检测错误内容是否为 Cloudflare 验证页面
-                is_cloudflare_error = False
-                if isinstance(error_msg, str):
-                    for pattern in cloudflare_patterns:
-                        if re.search(pattern, error_msg, re.IGNORECASE):
-                            is_cloudflare_error = True
-                            break
-                
-                if is_cloudflare_error:
-                    friendly_error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
-                    logger.error(f"STREAMER [ID: {request_id[:8]}]: {friendly_error_msg}")
-                    
-                    # 向油猴脚本发送刷新指令
-                    if browser_ws:
-                        try:
-                            await browser_ws.send_text(json.dumps({"command": "refresh"}))
-                            logger.info(f"STREAMER [ID: {request_id[:8]}]: 已向浏览器发送页面刷新指令。")
-                        except Exception as e:
-                            logger.error(f"STREAMER [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
-
-                    error_chunk = {"id": response_id, "object": "chat.completion.chunk", "created": int(asyncio.get_event_loop().time()), "model": model, "choices": [{"index": 0, "delta": {"content": f"\n\n[LMArena Bridge Error]: {friendly_error_msg}"}}]}
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
-                    return # 直接终止
-
-                # 如果不是 Cloudflare 错误，则按原样报告
-                logger.error(f"STREAMER [ID: {request_id[:8]}]: 收到错误信号: {error_msg}")
-                error_chunk = {
-                    "id": response_id, "object": "chat.completion.chunk",
-                    "created": int(asyncio.get_event_loop().time()), "model": model,
-                    "choices": [{"index": 0, "delta": {"content": f"\n\n[LMArena Bridge Error]: {error_msg}"}}]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
+            try:
+                raw_data = await asyncio.wait_for(queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(f"PROCESSOR [ID: {request_id[:8]}]: 等待浏览器数据超时（{timeout}秒）。")
+                yield 'error', f'Response timed out after {timeout} seconds.'
                 return
-            
-            # 旧的 "[DONE]" 信号可能不再使用，但保留以防万一
+
+            if isinstance(raw_data, dict) and 'error' in raw_data:
+                yield 'error', raw_data.get('error', 'Unknown browser error')
+                return
             if raw_data == "[DONE]":
-                logger.info(f"STREAMER [ID: {request_id[:8]}]: 收到旧的 [DONE] 信号。")
                 break
 
-            # 将新数据块添加到缓冲区
-            if isinstance(raw_data, str):
-                buffer += raw_data
-            elif isinstance(raw_data, list):
-                # 有时（特别是发生错误时，如Cloudflare验证），浏览器会发送一个包含单个HTML字符串的列表
-                buffer += "".join(str(item) for item in raw_data)
+            buffer += "".join(str(item) for item in raw_data) if isinstance(raw_data, list) else raw_data
 
-            # --- 错误检测 ---
-            # 1. 检测 Cloudflare 人机验证
-            for pattern in cloudflare_patterns:
-                if re.search(pattern, buffer, re.IGNORECASE):
-                    error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
-                    logger.error(f"STREAMER [ID: {request_id[:8]}]: {error_msg}")
-                    error_chunk = {"id": response_id, "object": "chat.completion.chunk", "created": int(asyncio.get_event_loop().time()), "model": model, "choices": [{"index": 0, "delta": {"content": f"\n\n[LMArena Bridge Error]: {error_msg}"}}]}
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
-                    return # 直接终止
-
-            # 2. 检测 LMArena 返回的 JSON 错误
-            error_match = error_pattern.search(buffer)
-            if error_match:
+            if any(re.search(p, buffer, re.IGNORECASE) for p in cloudflare_patterns):
+                error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
+                if browser_ws:
+                    try:
+                        await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
+                        logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 已向浏览器发送页面刷新指令。")
+                    except Exception as e:
+                        logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
+                yield 'error', error_msg
+                return
+            
+            if (error_match := error_pattern.search(buffer)):
                 try:
                     error_json = json.loads(error_match.group(1))
-                    error_message = error_json.get("error", "来自 LMArena 的未知错误")
-                    logger.error(f"STREAMER [ID: {request_id[:8]}]: 在流中检测到错误: {error_message}")
-                    error_chunk = {"id": response_id, "object": "chat.completion.chunk", "created": int(asyncio.get_event_loop().time()), "model": model, "choices": [{"index": 0, "delta": {"content": f"\n\n[LMArena Bridge Error]: {error_message}"}}]}
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
-                    return # 直接终止
-                except json.JSONDecodeError:
-                    pass # 如果不是合法的JSON，则忽略，让后续逻辑处理
+                    yield 'error', error_json.get("error", "来自 LMArena 的未知错误")
+                    return
+                except json.JSONDecodeError: pass
 
-            # --- 处理缓冲区中的数据 ---
-            # 1. 提取并处理所有完整的文本块
-            while True:
-                match = text_pattern.search(buffer)
-                if not match:
-                    break
-                
+            while (match := text_pattern.search(buffer)):
                 try:
-                    # 提取并用 json.loads 解码转义字符
                     text_content = json.loads(f'"{match.group(1)}"')
-                    if text_content: # 仅在有内容时发送
-                        chunk = {
-                            "id": response_id, "object": "chat.completion.chunk",
-                            "created": int(asyncio.get_event_loop().time()), "model": model,
-                            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text_content}}]
-                        }
-                        sse_chunk = f"data: {json.dumps(chunk)}\n\n"
-                        yield sse_chunk
-                except (ValueError, json.JSONDecodeError) as e:
-                    logger.warning(f"STREAMER [ID: {request_id[:8]}]: JSON 解码流内容时出错: '{match.group(1)}', 错误: {e}")
-                
-                # 从缓冲区移除已处理的部分
+                    if text_content: yield 'content', text_content
+                except (ValueError, json.JSONDecodeError): pass
                 buffer = buffer[match.end():]
 
-            # 2. 检查流结束信号（但不终止循环）
-            finish_match = finish_pattern.search(buffer)
-            if finish_match:
+            if (finish_match := finish_pattern.search(buffer)):
                 try:
-                    finish_json_str = finish_match.group(1)
-                    finish_data = json.loads(finish_json_str)
-                    finish_reason = finish_data.get("finishReason", "stop")
-                    logger.info(f"STREAMER [ID: {request_id[:8]}]: 在流中检测到结束信号，原因: {finish_reason}。等待最终的 [DONE] 信号。")
-
-                    # 如果是内容审查，则发送特定警告信息
-                    if finish_reason == 'content-filter':
-                        warning_content = "\n\n响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因"
-                        chunk = {
-                            "id": response_id, "object": "chat.completion.chunk",
-                            "created": int(asyncio.get_event_loop().time()), "model": model,
-                            "choices": [{"index": 0, "delta": {"content": warning_content}}]
-                        }
-                        sse_chunk = f"data: {json.dumps(chunk)}\n\n"
-                        yield sse_chunk
-                except (json.JSONDecodeError, IndexError):
-                    logger.warning(f"STREAMER [ID: {request_id[:8]}]: 解析流中的结束信号 JSON 失败。")
-                
-                # 从缓冲区移除已处理的结束信号部分，以防重复处理
+                    finish_data = json.loads(finish_match.group(1))
+                    yield 'finish', finish_data.get("finishReason", "stop")
+                except (json.JSONDecodeError, IndexError): pass
                 buffer = buffer[finish_match.end():]
-        
-        # 发送最终的 SSE 消息
-        yield "data: [DONE]\n\n"
-        logger.info(f"STREAMER [ID: {request_id[:8]}]: 已向客户端发送最终 [DONE] 消息。")
 
+    except asyncio.CancelledError:
+        logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 任务被取消。")
     finally:
-        # 清理，防止内存泄漏
         if request_id in response_channels:
             del response_channels[request_id]
-            logger.info(f"STREAMER [ID: {request_id[:8]}]: 生成器结束，响应通道已清理。")
+            logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 响应通道已清理。")
+
+async def stream_generator(request_id: str, model: str):
+    """将内部事件流格式化为 OpenAI SSE 响应。"""
+    response_id = f"chatcmpl-{uuid.uuid4()}"
+    logger.info(f"STREAMER [ID: {request_id[:8]}]: 流式生成器启动。")
+    
+    async for event_type, data in _process_lmarena_stream(request_id):
+        if event_type == 'content':
+            yield format_openai_chunk(data, model, response_id)
+        elif event_type == 'finish':
+            if data == 'content-filter':
+                warning_msg = "\n\n响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因"
+                yield format_openai_chunk(warning_msg, model, response_id)
+            yield format_openai_finish_chunk(model, response_id, reason=data)
+            return
+        elif event_type == 'error':
+            logger.error(f"STREAMER [ID: {request_id[:8]}]: 流中发生错误: {data}")
+            yield format_openai_error_chunk(str(data), model, response_id)
+            yield format_openai_finish_chunk(model, response_id, reason='stop')
+            return
+    
+    yield format_openai_finish_chunk(model, response_id, reason='stop')
+    logger.info(f"STREAMER [ID: {request_id[:8]}]: 流式生成器正常结束。")
+
+async def non_stream_response(request_id: str, model: str):
+    """聚合内部事件流并返回单个 OpenAI JSON 响应。"""
+    response_id = f"chatcmpl-{uuid.uuid4()}"
+    logger.info(f"NON-STREAM [ID: {request_id[:8]}]: 开始处理非流式响应。")
+    
+    full_content = []
+    finish_reason = "stop"
+    
+    async for event_type, data in _process_lmarena_stream(request_id):
+        if event_type == 'content':
+            full_content.append(data)
+        elif event_type == 'finish':
+            finish_reason = data
+            if data == 'content-filter':
+                full_content.append("\n\n响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因")
+            break
+        elif event_type == 'error':
+            logger.error(f"NON-STREAM [ID: {request_id[:8]}]: 处理时发生错误: {data}")
+            error_response = {
+                "error": {
+                    "message": f"[LMArena Bridge Error]: {data}",
+                    "type": "bridge_error",
+                    "code": "processing_error"
+                }
+            }
+            return Response(content=json.dumps(error_response, ensure_ascii=False), status_code=500, media_type="application/json")
+
+    final_content = "".join(full_content)
+    response_data = format_openai_non_stream_response(final_content, model, response_id, reason=finish_reason)
+    
+    logger.info(f"NON-STREAM [ID: {request_id[:8]}]: 响应聚合完成。")
+    return Response(content=json.dumps(response_data, ensure_ascii=False), media_type="application/json")
 
 # --- WebSocket 端点 ---
 @app.websocket("/ws")
@@ -696,11 +708,18 @@ async def chat_completions(request: Request):
         logger.info(f"API CALL [ID: {request_id[:8]}]: 正在通过 WebSocket 发送载荷到油猴脚本。")
         await browser_ws.send_text(json.dumps(message_to_browser))
 
-        # 4. 返回流式响应
-        return StreamingResponse(
-            stream_generator(request_id, model_name or "default_model"),
-            media_type="text/event-stream"
-        )
+        # 4. 根据 stream 参数决定返回类型
+        is_stream = openai_req.get("stream", True)
+
+        if is_stream:
+            # 返回流式响应
+            return StreamingResponse(
+                stream_generator(request_id, model_name or "default_model"),
+                media_type="text/event-stream"
+            )
+        else:
+            # 返回非流式响应
+            return await non_stream_response(request_id, model_name or "default_model")
     except Exception as e:
         # 如果在设置过程中出错，清理通道
         if request_id in response_channels:
