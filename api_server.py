@@ -312,6 +312,12 @@ def idle_monitor():
     while True:
         if CONFIG.get("enable_idle_restart", False):
             timeout = CONFIG.get("idle_restart_timeout_seconds", 300)
+            
+            # 如果超时设置为-1，则禁用重启检查
+            if timeout == -1:
+                time.sleep(10) # 仍然需要休眠以避免繁忙循环
+                continue
+
             idle_time = (datetime.now() - last_activity_time).total_seconds()
             
             if idle_time > timeout:
