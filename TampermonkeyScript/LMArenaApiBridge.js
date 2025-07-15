@@ -36,8 +36,8 @@
                 // 检查是否是指令，而不是标准的聊天请求
                 if (message.command) {
                     console.log(`[API Bridge] ⬇️ 收到指令: ${message.command}`);
-                    if (message.command === 'refresh') {
-                        console.log("[API Bridge] 正在执行页面刷新...");
+                    if (message.command === 'refresh' || message.command === 'reconnect') {
+                        console.log(`[API Bridge] 收到 '${message.command}' 指令，正在执行页面刷新...`);
                         location.reload();
                     } else if (message.command === 'activate_id_capture') {
                         console.log("[API Bridge] ✅ ID 捕获模式已激活。请在页面上触发一次 'Retry' 操作。");

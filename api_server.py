@@ -10,6 +10,8 @@ import subprocess
 import time
 import uuid
 import re
+import threading
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -32,6 +34,9 @@ browser_ws: WebSocket | None = None
 # response_channels 用于存储每个 API 请求的响应队列。
 # 键是 request_id，值是 asyncio.Queue。
 response_channels: dict[str, asyncio.Queue] = {}
+last_activity_time = None # 记录最后一次活动的时间
+idle_monitor_thread = None # 空闲监控线程
+main_event_loop = None # 主事件循环
 
 # --- 模型映射 ---
 MODEL_NAME_TO_ID_MAP = {}
@@ -265,10 +270,64 @@ def compare_and_update_models(new_models_list, models_path):
     
     logger.info("--- 检查与更新完毕 ---")
 
+# --- 自动重启逻辑 ---
+def restart_server():
+    """优雅地通知客户端刷新，然后重启服务器。"""
+    logger.warning("="*60)
+    logger.warning("检测到服务器空闲超时，准备自动重启...")
+    logger.warning("="*60)
+    
+    # 1. (异步) 通知浏览器刷新
+    async def notify_browser_refresh():
+        if browser_ws:
+            try:
+                # 优先发送 'reconnect' 指令，让前端知道这是一个计划内的重启
+                await browser_ws.send_text(json.dumps({"command": "reconnect"}, ensure_ascii=False))
+                logger.info("已向浏览器发送 'reconnect' 指令。")
+            except Exception as e:
+                logger.error(f"发送 'reconnect' 指令失败: {e}")
+    
+    # 在主事件循环中运行异步通知函数
+    # 使用`asyncio.run_coroutine_threadsafe`确保线程安全
+    if browser_ws and browser_ws.client_state.name == 'CONNECTED' and main_event_loop:
+        asyncio.run_coroutine_threadsafe(notify_browser_refresh(), main_event_loop)
+    
+    # 2. 延迟几秒以确保消息发送
+    time.sleep(3)
+    
+    # 3. 执行重启
+    logger.info("正在重启服务器...")
+    os.execv(sys.executable, ['python'] + sys.argv)
+
+def idle_monitor():
+    """在后台线程中运行，监控服务器是否空闲。"""
+    global last_activity_time
+    
+    # 等待，直到 last_activity_time 被首次设置
+    while last_activity_time is None:
+        time.sleep(1)
+        
+    logger.info("空闲监控线程已启动。")
+    
+    while True:
+        if CONFIG.get("enable_idle_restart", False):
+            timeout = CONFIG.get("idle_restart_timeout_seconds", 300)
+            idle_time = (datetime.now() - last_activity_time).total_seconds()
+            
+            if idle_time > timeout:
+                logger.info(f"服务器空闲时间 ({idle_time:.0f}s) 已超过阈值 ({timeout}s)。")
+                restart_server()
+                break # 退出循环，因为进程即将被替换
+                
+        # 每 10 秒检查一次
+        time.sleep(10)
+
 # --- FastAPI 生命周期事件 ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """在服务器启动时运行的生命周期函数。"""
+    global idle_monitor_thread, last_activity_time, main_event_loop
+    main_event_loop = asyncio.get_running_loop() # 获取主事件循环
     load_config() # 首先加载配置
     
     # --- 打印当前的操作模式 ---
@@ -284,6 +343,15 @@ async def lifespan(app: FastAPI):
     check_for_updates() # 检查程序更新
     load_model_map() # 加载模型映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
+
+    # 在模型更新后，标记活动时间的起点
+    last_activity_time = datetime.now()
+    
+    # 启动空闲监控线程
+    if CONFIG.get("enable_idle_restart", False):
+        idle_monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
+        idle_monitor_thread.start()
+
     yield
     logger.info("服务器正在关闭。")
 
@@ -693,6 +761,10 @@ async def chat_completions(request: Request):
     接收 OpenAI 格式的请求，将其转换为 LMArena 格式，
     通过 WebSocket 发送给油猴脚本，然后流式返回结果。
     """
+    global last_activity_time
+    last_activity_time = datetime.now() # 更新活动时间
+    logger.info(f"API请求已收到，活动时间已更新为: {last_activity_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
     load_config()  # 实时加载最新配置，确保会话ID等信息是最新的
     # --- API Key 验证 ---
     api_key = CONFIG.get("api_key")

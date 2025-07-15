@@ -1,22 +1,22 @@
 {
   // 版本号
   // 用于程序更新检查，请不要手动修改。
-  "version": "2.2.1",
+  "version": "2.2.2",
 
   // --- 会话设置 ---
   // 当前 LMArena 页面的会话 ID。
   // 通过运行 id_updater.py 可以自动更新。
-  "session_id": "ef1fc7b3-1478-47b2-94a9-8e7269ed9c57",
+  "session_id": "724142cb-0c46-4e12-a64f-11b4edb8db2e",
 
   // 当前会话的最后一条消息 ID。
   // 通过运行 id_updater.py 可以自动更新。
-  "message_id": "4ea589ed-67b2-458e-835b-1cc82d04e559",
+  "message_id": "8b793fab-f2b8-4627-90c7-be04266959c0",
 
   // --- ID 更新器专用配置 ---
   // id_updater.py 上次使用的模式 ('direct_chat' 或 'battle')
-  "id_updater_last_mode": "direct_chat",
+  "id_updater_last_mode": "battle",
   // id_updater.py 在 Battle 模式下，要更新的目标 ('A' 或 'B')
-  "id_updater_battle_target": "A",
+  "id_updater_battle_target": "B",
 
   // --- 更新设置 ---
   // 开关：自动检查更新
@@ -39,6 +39,17 @@
   // 服务器等待来自浏览器的下一个数据块的最长时间。非流式也使用此值。
   // 如果您的网络连接较慢或模型响应时间很长，可以适当增加此值。
   "stream_response_timeout_seconds": 360,
+
+  // --- 自动重启设置 ---
+
+  // 开关：启用空闲自动重启
+  // 当服务器在指定时间内（如下所设）没有收到任何 API 请求时，将自动重启。
+  "enable_idle_restart": true,
+
+  // 空闲重启超时时间（秒）
+  // 服务器在“检查与更新完毕”后，若超过此时长未收到任何请求，则会重启。
+  // 5分钟 = 300秒
+  "idle_restart_timeout_seconds": 360,
 
   // --- 安全设置 ---
 
