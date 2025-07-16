@@ -21,6 +21,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 
+# --- 导入自定义模块 ---
+from modules import image_generation
+
 # --- 基础配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -357,6 +360,15 @@ async def lifespan(app: FastAPI):
     if CONFIG.get("enable_idle_restart", False):
         idle_monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
         idle_monitor_thread.start()
+        
+    # --- 初始化自定义模块 ---
+    image_generation.initialize_image_module(
+        app_logger=logger,
+        channels=response_channels,
+        app_config=CONFIG,
+        model_map=MODEL_NAME_TO_ID_MAP,
+        default_model_id=DEFAULT_MODEL_ID
+    )
 
     yield
     logger.info("服务器正在关闭。")
@@ -888,6 +900,21 @@ async def chat_completions(request: Request):
             del response_channels[request_id]
         logger.error(f"API CALL [ID: {request_id[:8]}]: 处理请求时发生致命错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/v1/images/generations")
+async def images_generations(request: Request):
+    """
+    处理文生图请求。
+    该端点接收 OpenAI 格式的图像生成请求，并返回相应的图像 URL。
+    """
+    global last_activity_time
+    last_activity_time = datetime.now()
+    logger.info(f"文生图 API 请求已收到，活动时间已更新为: {last_activity_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 模块已经通过 `initialize_image_module` 初始化，可以直接调用
+    response_data, status_code = await image_generation.handle_image_generation_request(request, browser_ws)
+    
+    return JSONResponse(content=response_data, status_code=status_code)
 
 # --- 内部通信端点 ---
 @app.post("/internal/start_id_capture")

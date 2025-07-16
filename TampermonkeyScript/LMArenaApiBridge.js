@@ -79,7 +79,7 @@
 
     async function executeFetchAndStreamBack(requestId, payload) {
         console.log(`[API Bridge] 当前操作域名: ${window.location.hostname}`);
-        const { message_templates, target_model_id, session_id, message_id } = payload;
+        const { is_image_request, message_templates, target_model_id, session_id, message_id } = payload;
 
         // --- 使用从后端配置传递的会话信息 ---
         if (!session_id || !message_id) {
@@ -90,10 +90,12 @@
             return;
         }
 
+        // URL 对于聊天和文生图是相同的
         const apiUrl = `/api/stream/retry-evaluation-session-message/${session_id}/messages/${message_id}`;
-        console.log(`[API Bridge] 使用后端配置的 API 端点: ${apiUrl}`);
-
-        // --- 新优化逻辑：将传入的最后一条消息设为 pending ---
+        const httpMethod = 'PUT';
+        
+        console.log(`[API Bridge] 使用 API 端点: ${apiUrl}`);
+        
         const newMessages = [];
         let lastMsgIdInChain = null;
 
@@ -105,26 +107,26 @@
             return;
         }
 
-        // 遍历所有消息，除了最后一条
+        // 这个循环逻辑对于聊天和文生图是通用的，因为后端已经准备好了正确的 message_templates
         for (let i = 0; i < message_templates.length; i++) {
             const template = message_templates[i];
             const currentMsgId = crypto.randomUUID();
             const parentIds = lastMsgIdInChain ? [lastMsgIdInChain] : [];
             
-            // 最后一条消息的状态设为 'pending'，其他都设为 'success'
-            const status = (i === message_templates.length - 1) ? 'pending' : 'success';
+            // 如果是文生图请求，状态总是 'success'
+            // 否则，只有最后一条消息是 'pending'
+            const status = is_image_request ? 'success' : ((i === message_templates.length - 1) ? 'pending' : 'success');
 
             newMessages.push({
                 role: template.role,
                 content: template.content,
                 id: currentMsgId,
                 evaluationId: null,
-                evaluationSessionId: session_id, // 使用从后端传递的 session_id
+                evaluationSessionId: session_id,
                 parentMessageIds: parentIds,
                 experimental_attachments: template.attachments || [],
                 failureReason: null,
                 metadata: null,
-                // 使用从后端 payload 的 message_templates 中传递过来的 participantPosition
                 participantPosition: template.participantPosition || "a",
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -144,7 +146,7 @@
         window.isApiBridgeRequest = true;
         try {
             const response = await fetch(apiUrl, {
-                method: 'PUT', // 'retry' 端点使用 PUT 方法
+                method: httpMethod,
                 headers: {
                     'Content-Type': 'text/plain;charset=UTF-8', // LMArena 使用 text/plain
                     'Accept': '*/*',

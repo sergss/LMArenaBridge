@@ -4,3 +4,4 @@ test_openai_request.py
 原始openai格式.txt
 /另
 stress_test.py
+/modules/__pycache__
