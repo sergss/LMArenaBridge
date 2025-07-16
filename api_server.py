@@ -11,6 +11,7 @@ import time
 import uuid
 import re
 import threading
+import random
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -43,7 +44,27 @@ main_event_loop = None # 主事件循环
 
 # --- 模型映射 ---
 MODEL_NAME_TO_ID_MAP = {}
+MODEL_ENDPOINT_MAP = {} # 新增：用于存储模型到 session/message ID 的映射
 DEFAULT_MODEL_ID = "f44e280a-7914-43ca-a25d-ecfcc5d48d09" # 默认模型: Claude 3.5 Sonnet
+
+def load_model_endpoint_map():
+    """从 model_endpoint_map.json 加载模型到端点的映射。"""
+    global MODEL_ENDPOINT_MAP
+    try:
+        with open('model_endpoint_map.json', 'r', encoding='utf-8') as f:
+            content = f.read()
+            # 允许空文件
+            if not content.strip():
+                MODEL_ENDPOINT_MAP = {}
+            else:
+                MODEL_ENDPOINT_MAP = json.loads(content)
+        logger.info(f"成功从 'model_endpoint_map.json' 加载了 {len(MODEL_ENDPOINT_MAP)} 个模型端点映射。")
+    except FileNotFoundError:
+        logger.warning("'model_endpoint_map.json' 文件未找到。将使用空映射。")
+        MODEL_ENDPOINT_MAP = {}
+    except json.JSONDecodeError as e:
+        logger.error(f"加载或解析 'model_endpoint_map.json' 失败: {e}。将使用空映射。")
+        MODEL_ENDPOINT_MAP = {}
 
 def load_config():
     """从 config.jsonc 加载配置，并处理 JSONC 注释。"""
@@ -350,7 +371,8 @@ async def lifespan(app: FastAPI):
     logger.info("="*60)
 
     check_for_updates() # 检查程序更新
-    load_model_map() # 加载模型映射
+    load_model_map() # 加载模型ID映射
+    load_model_endpoint_map() # 加载模型端点映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
 
     # 在模型更新后，标记活动时间的起点
@@ -464,12 +486,21 @@ def _process_openai_message(message: dict) -> dict:
         "attachments": attachments
     }
 
-def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, message_id: str) -> dict:
+def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, message_id: str, mode_override: str = None, battle_target_override: str = None) -> dict:
     """
     将 OpenAI 请求体转换为油猴脚本所需的简化载荷，并应用酒馆模式、绕过模式以及对战模式。
+    新增了模式覆盖参数，以支持模型特定的会话模式。
     """
-    # 1. 处理所有消息，分离文本和附件
-    processed_messages = [_process_openai_message(msg.copy()) for msg in openai_data.get("messages", [])]
+    # 1. 规范化角色并处理消息
+    #    - 将非标准的 'developer' 角色转换为 'system' 以提高兼容性。
+    #    - 分离文本和附件。
+    messages = openai_data.get("messages", [])
+    for msg in messages:
+        if msg.get("role") == "developer":
+            msg["role"] = "system"
+            logger.info("消息角色规范化：将 'developer' 转换为 'system'。")
+            
+    processed_messages = [_process_openai_message(msg.copy()) for msg in messages]
 
     # 2. 应用酒馆模式 (Tavern Mode)
     if CONFIG.get("tavern_mode_enabled"):
@@ -505,9 +536,12 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
         message_templates.append({"role": "user", "content": " ", "participantPosition": "a", "attachments": []})
 
     # 6. 应用参与者位置 (Participant Position)
-    mode = CONFIG.get("id_updater_last_mode", "direct_chat")
-    target_participant = CONFIG.get("id_updater_battle_target", "A").lower()
-    logger.info(f"正在根据模式 '{mode}' 设置 Participant Positions...")
+    # 优先使用覆盖的模式，否则回退到全局配置
+    mode = mode_override or CONFIG.get("id_updater_last_mode", "direct_chat")
+    target_participant = battle_target_override or CONFIG.get("id_updater_battle_target", "A")
+    target_participant = target_participant.lower() # 确保是小写
+
+    logger.info(f"正在根据模式 '{mode}' (目标: {target_participant if mode == 'battle' else 'N/A'}) 设置 Participant Positions...")
 
     for msg in message_templates:
         if msg['role'] == 'system':
@@ -849,18 +883,58 @@ async def chat_completions(request: Request):
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
 
-    # --- 确定并验证会话信息 ---
-    # 优先使用请求体中提供的ID，否则回退到配置文件中的ID
-    session_id = openai_req.get("session_id") or CONFIG.get("session_id")
-    message_id = openai_req.get("message_id") or CONFIG.get("message_id")
+    # --- 模型与会话ID映射逻辑 ---
+    model_name = openai_req.get("model")
+    session_id, message_id = None, None
+    mode_override, battle_target_override = None, None
 
+    if model_name and model_name in MODEL_ENDPOINT_MAP:
+        mapping_entry = MODEL_ENDPOINT_MAP[model_name]
+        selected_mapping = None
+
+        if isinstance(mapping_entry, list) and mapping_entry:
+            selected_mapping = random.choice(mapping_entry)
+            logger.info(f"为模型 '{model_name}' 从ID列表中随机选择了一个映射。")
+        elif isinstance(mapping_entry, dict):
+            selected_mapping = mapping_entry
+            logger.info(f"为模型 '{model_name}' 找到了单个端点映射（旧格式）。")
+        
+        if selected_mapping:
+            session_id = selected_mapping.get("session_id")
+            message_id = selected_mapping.get("message_id")
+            # 关键：同时获取模式信息
+            mode_override = selected_mapping.get("mode") # 可能为 None
+            battle_target_override = selected_mapping.get("battle_target") # 可能为 None
+            log_msg = f"将使用 Session ID: ...{session_id[-6:] if session_id else 'N/A'}"
+            if mode_override:
+                log_msg += f" (模式: {mode_override}"
+                if mode_override == 'battle':
+                    log_msg += f", 目标: {battle_target_override or 'A'}"
+                log_msg += ")"
+            logger.info(log_msg)
+
+    # 如果经过以上处理，session_id 仍然是 None，则进入全局回退逻辑
+    if not session_id:
+        if CONFIG.get("use_default_ids_if_mapping_not_found", True):
+            session_id = CONFIG.get("session_id")
+            message_id = CONFIG.get("message_id")
+            # 当使用全局ID时，不设置模式覆盖，让其使用全局配置
+            mode_override, battle_target_override = None, None
+            logger.info(f"模型 '{model_name}' 未找到有效映射，根据配置使用全局默认 Session ID: ...{session_id[-6:] if session_id else 'N/A'}")
+        else:
+            logger.error(f"模型 '{model_name}' 未在 'model_endpoint_map.json' 中找到有效映射，且已禁用回退到默认ID。")
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型 '{model_name}' 没有配置独立的会话ID。请在 'model_endpoint_map.json' 中添加有效映射或在 'config.jsonc' 中启用 'use_default_ids_if_mapping_not_found'。"
+            )
+
+    # --- 验证最终确定的会话信息 ---
     if not session_id or not message_id or "YOUR_" in session_id or "YOUR_" in message_id:
         raise HTTPException(
             status_code=400,
-            detail="会话ID或消息ID无效。请在请求体中提供，或运行 `id_updater.py` 来设置默认值。"
+            detail="最终确定的会话ID或消息ID无效。请检查 'model_endpoint_map.json' 和 'config.jsonc' 中的配置，或运行 `id_updater.py` 来更新默认值。"
         )
 
-    model_name = openai_req.get("model")
     if not model_name or model_name not in MODEL_NAME_TO_ID_MAP:
         logger.warning(f"请求的模型 '{model_name}' 不在 models.json 中，将使用默认模型ID。")
 
@@ -869,8 +943,14 @@ async def chat_completions(request: Request):
     logger.info(f"API CALL [ID: {request_id[:8]}]: 已创建响应通道。")
 
     try:
-        # 1. 转换请求
-        lmarena_payload = convert_openai_to_lmarena_payload(openai_req, session_id, message_id)
+        # 1. 转换请求，传入可能存在的模式覆盖信息
+        lmarena_payload = convert_openai_to_lmarena_payload(
+            openai_req,
+            session_id,
+            message_id,
+            mode_override=mode_override,
+            battle_target_override=battle_target_override
+        )
         
         # 2. 包装成发送给浏览器的消息
         message_to_browser = {

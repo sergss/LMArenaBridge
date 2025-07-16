@@ -50,9 +50,11 @@ async def _process_image_stream(request_id: str) -> AsyncGenerator[tuple[str, st
 
     buffer = ""
     timeout = CONFIG.get("stream_response_timeout_seconds", 360)
-    image_pattern = re.compile(r'a2:(\[.*?\])')
-    finish_pattern = re.compile(r'ad:(\{.*?"finishReason".*?\})')
-    error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
+    # 通用化正则表达式以匹配 a 或 b 前缀
+    image_pattern = re.compile(r'[ab]2:(\[.*?\])')
+    finish_pattern = re.compile(r'[ab]d:(\{.*?"finishReason".*?\})')
+    # 通用错误匹配，可以捕获包含 "error" 或 "context_file" 的 JSON 对象
+    error_pattern = re.compile(r'(\{\s*".*?"\s*:\s*".*?"(error|context_file).*?"\s*\})', re.DOTALL | re.IGNORECASE)
     
     found_image_url = None # 用于存储找到的 URL
 
@@ -112,8 +114,9 @@ async def _process_image_stream(request_id: str) -> AsyncGenerator[tuple[str, st
         # 循环结束后，根据是否找到了 URL 来 yield 最终结果
         if found_image_url:
             yield 'image_url', found_image_url
-        else:
-            # 如果流结束了但还是没找到图片，报告错误
+        # 如果没有图片URL，但有结束原因，则不发送错误，让调用者决定
+        elif not any(e[0] == 'finish' for e in locals().get('_debug_events', [])):
+             # 如果流结束了但还是没找到图片，报告错误
             yield 'error', 'Stream ended without providing an image URL.'
 
     except asyncio.CancelledError:
@@ -148,7 +151,7 @@ async def generate_single_image(prompt: str, model_name: str, browser_ws) -> str
         logger.info(f"IMAGE GEN (SINGLE) [ID: {request_id[:8]}]: 正在发送请求...")
         await browser_ws.send_text(json.dumps(message_to_browser))
 
-        # _process_image_stream 现在只会 yield 'image_url' 或 'error' 一次
+        # _process_image_stream 现在只会 yield 'image_url' 或 'error' 或 'finish'
         async for event_type, data in _process_image_stream(request_id):
             if event_type == 'image_url':
                 logger.info(f"IMAGE GEN (SINGLE) [ID: {request_id[:8]}]: 成功获取图片 URL。")
@@ -156,10 +159,13 @@ async def generate_single_image(prompt: str, model_name: str, browser_ws) -> str
             elif event_type == 'error':
                  logger.error(f"IMAGE GEN (SINGLE) [ID: {request_id[:8]}]: 流处理错误: {data}")
                  return {"error": data}
-            # finish event is now ignored here, as we wait for the final outcome
+            elif event_type == 'finish':
+                logger.warning(f"IMAGE GEN (SINGLE) [ID: {request_id[:8]}]: 收到结束信号: {data}")
+                if data == 'content-filter':
+                    return {"error": "响应被终止，可能是上下文超限或者模型内部审查（大概率）的原因"}
         
-        # 这行理论上不应该被执行，因为 _process_image_stream 总会返回一个值
-        return {"error": "Image generation stream ended unexpectedly."}
+        # 如果循环正常结束但没有任何返回（例如，只收到了 finish:stop），则报告错误。
+        return {"error": "Image generation stream ended without a result."}
 
     except Exception as e:
         logger.error(f"IMAGE GEN (SINGLE) [ID: {request_id[:8]}]: 处理时发生致命错误: {e}", exc_info=True)

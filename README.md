@@ -20,6 +20,56 @@
 *   **🍻 酒馆模式 (Tavern Mode)**: 专为 SillyTavern 等应用设计，智能合并 `system` 提示词，确保兼容性。
 *   **🤫 Bypass 模式**: 尝试通过在请求中额外注入一个空的用户消息，绕过平台的敏感词审查。
 *   **🔐 API Key 保护**: 可在配置文件中设置 API Key，为你的服务增加一层安全保障。
+*   **🎯 模型-会话高级映射**: 支持为不同模型配置独立的会话ID池，并能为每个会话指定特定的工作模式（如 `battle` 或 `direct_chat`），实现更精细的请求控制。
+
+## ⚙️ 配置文件说明
+
+项目的主要行为通过 `config.jsonc` 和 `model_endpoint_map.json` 进行控制。
+
+### `config.jsonc` - 全局配置
+
+这是主要的配置文件，包含了服务器的全局设置。
+
+*   `session_id` / `message_id`: 全局默认的会话ID。当模型没有在 `model_endpoint_map.json` 中找到特定映射时，会使用这里的ID。
+*   `id_updater_last_mode` / `id_updater_battle_target`: 全局默认的请求模式。同样，当特定会话没有指定模式时，会使用这里的设置。
+*   `use_default_ids_if_mapping_not_found`: 一个非常重要的开关（默认为 `true`）。
+    *   `true`: 如果请求的模型在 `model_endpoint_map.json` 中找不到，就使用全局默认的ID和模式。
+    *   `false`: 如果找不到映射，则直接返回错误。这在你需要严格控制每个模型的会话时非常有用。
+*   其他配置项如 `api_key`, `tavern_mode_enabled` 等，请参考文件内的注释。
+
+### `model_endpoint_map.json` - 模型专属配置
+
+这是一个强大的高级功能，允许你覆盖全局配置，为特定的模型设置一个或多个专属的会话。
+
+**核心优势**:
+1.  **会话隔离**: 为不同的模型使用独立的会话，避免上下文串扰。
+2.  **提高并发**: 为热门模型配置一个ID池，程序会在每次请求时随机选择一个ID使用，模拟轮询，减少单个会话被频繁请求的风险。
+3.  **模式绑定**: 将一个会话ID与它被捕获时的模式（`direct_chat` 或 `battle`）绑定，确保请求格式永远正确。
+
+**配置示例**:
+```json
+{
+  "claude-3-opus-20240229": [
+    {
+      "session_id": "session_for_direct_chat_1",
+      "message_id": "message_for_direct_chat_1",
+      "mode": "direct_chat"
+    },
+    {
+      "session_id": "session_for_battle_A",
+      "message_id": "message_for_battle_A",
+      "mode": "battle",
+      "battle_target": "A"
+    }
+  ],
+  "gemini-1.5-pro-20241022": {
+      "session_id": "single_session_id_no_mode",
+      "message_id": "single_message_id_no_mode"
+  }
+}
+```
+*   **Opus**: 配置了一个ID池。请求时会随机选择其中一个，并严格按照其绑定的 `mode` 和 `battle_target` 来发送请求。
+*   **Gemini**: 使用了单个ID对象（旧格式，依然兼容）。由于它没有指定 `mode`，程序会自动使用 `config.jsonc` 中定义的全局模式。
 
 ## 🛠️ 安装与使用
 
@@ -189,10 +239,11 @@ sequenceDiagram
 ├── api_server.py               # 核心后端服务 (FastAPI) 🐍
 ├── id_updater.py               # 一键式会话ID更新脚本 🆔
 ├── test_image_generation.py    # 文生图功能测试脚本 🧪
-├── models.json                 # 模型名称到 ID 的映射表 🗺️
+├── models.json                 # 模型名称到 LMArena 内部 ID 的映射表 🗺️
+├── model_endpoint_map.json     # [高级] 模型到专属会话ID的映射表 🎯
 ├── requirements.txt            # Python 依赖包列表 📦
 ├── README.md                   # 就是你现在正在看的这个文件 👋
-├── config.jsonc                # 功能配置文件 ⚙️
+├── config.jsonc                # 全局功能配置文件 ⚙️
 ├── modules/
 │   ├── image_generation.py     # 文生图模块 🎨
 │   └── update_script.py        # 自动更新逻辑脚本 🔄
