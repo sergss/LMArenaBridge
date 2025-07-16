@@ -463,8 +463,12 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
 
     for msg in message_templates:
         if msg['role'] == 'system':
-            # 最终规则：无论何种模式，system 角色的 position 始终固定为 'b'
-            msg['participantPosition'] = 'b'
+            if mode == 'battle':
+                # Battle 模式: system 与用户选择的助手在同一边 (A则a, B则b)
+                msg['participantPosition'] = target_participant
+            else:
+                # DirectChat 模式: system 固定为 'b'
+                msg['participantPosition'] = 'b'
         elif mode == 'battle':
             # Battle 模式下，非 system 消息使用用户选择的目标 participant
             msg['participantPosition'] = target_participant

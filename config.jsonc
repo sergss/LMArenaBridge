@@ -1,16 +1,16 @@
 {
   // 版本号
   // 用于程序更新检查，请不要手动修改。
-  "version": "2.2.2",
+  "version": "2.2.3",
 
   // --- 会话设置 ---
   // 当前 LMArena 页面的会话 ID。
   // 通过运行 id_updater.py 可以自动更新。
-  "session_id": "724142cb-0c46-4e12-a64f-11b4edb8db2e",
+  "session_id": "18eeffd5-00f7-452d-a6c8-23882a04b2ef",
 
   // 当前会话的最后一条消息 ID。
   // 通过运行 id_updater.py 可以自动更新。
-  "message_id": "8b793fab-f2b8-4627-90c7-be04266959c0",
+  "message_id": "fe620f15-ef7a-4d6e-b63f-3b08e8e3529e",
 
   // --- ID 更新器专用配置 ---
   // id_updater.py 上次使用的模式 ('direct_chat' 或 'battle')
@@ -31,7 +31,7 @@
 
   // 功能开关：酒馆模式 (Tavern Mode)
   // 此模式专为需要完整历史记录注入的场景设计（如酒馆AI、SillyTavern等）。
-  "tavern_mode_enabled": false,
+  "tavern_mode_enabled": true,
 
   // --- 高级设置 ---
 
