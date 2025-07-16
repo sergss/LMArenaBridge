@@ -72,28 +72,29 @@ def main():
 
     current_files = get_all_relative_paths(destination_dir)
     
-    # 6. 计算需要删除的文件和文件夹
-    # 排除保留项和不受管理的用户文件（例如 venv）
-    files_to_delete = current_files - new_files - {config_filename, models_filename}
-    files_to_delete = {f for f in files_to_delete if f.split(os.sep)[0] not in preserved_items}
-
+    # 6. 计算需要删除的文件和文件夹 (此功能已禁用，以防止意外删除用户文件)
+    # # 排除保留项和不受管理的用户文件（例如 venv）
+    # files_to_delete = current_files - new_files - {config_filename, models_filename}
+    # files_to_delete = {f for f in files_to_delete if f.split(os.sep)[0] not in preserved_items}
+    #
+    # print("\n--- 文件变更分析 ---")
+    # if files_to_delete:
+    #     print("[-] 将删除以下旧文件/文件夹:")
+    #     for f in sorted(list(files_to_delete)):
+    #         print(f"  - {f}")
+    #
+    #     for f in sorted(list(files_to_delete), reverse=True): # 从内到外删除
+    #         try:
+    #             path_to_delete = os.path.join(destination_dir, f)
+    #             if os.path.isdir(path_to_delete.rstrip(os.sep)):
+    #                 shutil.rmtree(path_to_delete)
+    #             elif os.path.isfile(path_to_delete):
+    #                 os.remove(path_to_delete)
+    #         except OSError as e:
+    #             print(f"删除 {f} 时出错: {e}")
+    # else:
     print("\n--- 文件变更分析 ---")
-    if files_to_delete:
-        print("[-] 将删除以下旧文件/文件夹:")
-        for f in sorted(list(files_to_delete)):
-            print(f"  - {f}")
-        
-        for f in sorted(list(files_to_delete), reverse=True): # 从内到外删除
-            try:
-                path_to_delete = os.path.join(destination_dir, f)
-                if os.path.isdir(path_to_delete.rstrip(os.sep)):
-                    shutil.rmtree(path_to_delete)
-                elif os.path.isfile(path_to_delete):
-                    os.remove(path_to_delete)
-            except OSError as e:
-                print(f"删除 {f} 时出错: {e}")
-    else:
-        print("[*] 无需删除任何文件。")
+    print("[*] 文件删除功能已禁用，以保护用户数据。仅执行文件复制和配置更新。")
 
     # 7. 复制新文件（除配置文件外）
     print("\n[+] 正在复制新文件...")
