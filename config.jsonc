@@ -27,11 +27,11 @@
 
   // 功能开关：绕过敏感词检测
   // 在原始用户请求的对话中，额外注入一个内容为空的用户消息，以尝试绕过敏感词审查。
-  "bypass_enabled": false,
+  "bypass_enabled": true,
 
   // 功能开关：酒馆模式 (Tavern Mode)
   // 此模式专为需要完整历史记录注入的场景设计（如酒馆AI、SillyTavern等）。
-  "tavern_mode_enabled": true,
+  "tavern_mode_enabled": false,
 
   // --- 模型映射设置 ---
 
