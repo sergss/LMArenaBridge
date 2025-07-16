@@ -1,5 +1,7 @@
 # 🚀 LMArena Bridge - 新一代 OpenAI 桥接器 🌉
 
+* **务必把本项目单独放到一个文件夹**，自动更新时会先清空文件夹里所有文件，为了避免误删文件，还请单独隔离本项目
+
 欢迎来到新一代的 LMArena Bridge！🎉 这是一个基于 FastAPI 和 WebSocket 的高性能工具集，它能让你通过任何兼容 OpenAI API 的客户端或应用程序，无缝使用 [LMArena.ai](https://lmarena.ai/) 平台上提供的海量大语言模型。
 
 这个重构版本旨在提供更稳定、更易于维护和扩展的体验。
