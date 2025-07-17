@@ -9,6 +9,7 @@
 *   **🚀 高性能后端**: 基于 **FastAPI** 和 **Uvicorn**，提供异步、高性能的 API 服务。
 *   **🔌 稳定的 WebSocket 通信**: 使用 WebSocket 替代 Server-Sent Events (SSE)，实现更可靠、低延迟的双向通信。
 *   **🤖 OpenAI 兼容接口**: 完全兼容 OpenAI `v1/chat/completions`、`v1/models` 以及 `v1/images/generations` 端点。
+*   **📎 通用文件上传**: 支持通过 Base64 上传任意类型的文件（图片、音频、PDF、代码等），并支持一次性上传多个文件。
 *   **🎨 文生图支持**: 新增文生图功能，可通过标准 OpenAI 接口调用 LMArena 的图像生成模型。
 *   **🗣️ 完整对话历史支持**: 自动将会话历史注入到 LMArena，实现有上下文的连续对话。
 *   **🌊 实时流式响应**: 像原生 OpenAI API 一样，实时接收来自模型的文本回应。
@@ -238,7 +239,6 @@ sequenceDiagram
 ├── .gitignore                  # Git 忽略文件
 ├── api_server.py               # 核心后端服务 (FastAPI) 🐍
 ├── id_updater.py               # 一键式会话ID更新脚本 🆔
-├── test_image_generation.py    # 文生图功能测试脚本 🧪
 ├── models.json                 # 模型名称到 LMArena 内部 ID 的映射表 🗺️
 ├── model_endpoint_map.json     # [高级] 模型到专属会话ID的映射表 🎯
 ├── requirements.txt            # Python 依赖包列表 📦
