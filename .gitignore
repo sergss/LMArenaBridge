@@ -5,3 +5,4 @@ test_openai_request.py
 /另
 stress_test.py
 /modules/__pycache__
+test_multi_file_upload.py

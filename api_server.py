@@ -12,6 +12,7 @@ import uuid
 import re
 import threading
 import random
+import mimetypes
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -458,19 +459,40 @@ def _process_openai_message(message: dict) -> dict:
             elif part.get("type") == "image_url":
                 image_url_data = part.get("image_url", {})
                 url = image_url_data.get("url")
-                if url and url.startswith("data:image"):
+                # 扩展: 同时支持图片和音频的 base64 上传
+                if url and url.startswith("data:"):
                     try:
+                        # 从 data URI 中解析 content_type, e.g., "data:image/png;base64,..." -> "image/png"
                         content_type = url.split(';')[0].split(':')[1]
-                        file_extension = content_type.split('/')[1] if '/' in content_type else 'png'
-                        file_name = f"image_{uuid.uuid4()}.{file_extension}"
+                        main_type, sub_type = content_type.split('/') if '/' in content_type else ('application', 'octet-stream')
+                        
+                        # 根据主要类型确定文件名前缀
+                        if main_type == "image":
+                            prefix = "image"
+                        elif main_type == "audio":
+                            prefix = "audio"
+                        else:
+                            prefix = "file"
+                        
+                        # 优先从 MIME 类型猜测标准文件扩展名
+                        guessed_extension = mimetypes.guess_extension(content_type)
+                        if guessed_extension:
+                            # 移除前导点，例如 '.docx' -> 'docx'
+                            file_extension = guessed_extension.lstrip('.')
+                        else:
+                            # 如果无法猜测，则回退到子类型，但要避免过长的名称
+                            file_extension = sub_type if len(sub_type) < 20 else 'bin'
+
+                        file_name = f"{prefix}_{uuid.uuid4()}.{file_extension}"
                         
                         attachments.append({
                             "name": file_name,
                             "contentType": content_type,
                             "url": url
                         })
-                    except IndexError:
-                        logger.warning(f"无法解析的 base64 data URI: {url[:50]}...")
+                        logger.info(f"成功处理一个 {main_type} 附件: {file_name}")
+                    except (IndexError, ValueError) as e:
+                        logger.warning(f"无法解析的 base64 data URI: {url[:60]}... 错误: {e}")
 
         text_content = "\n\n".join(text_parts)
     elif isinstance(content, str):
@@ -638,18 +660,30 @@ async def _process_lmarena_stream(request_id: str):
             # 1. 检查来自 WebSocket 端的直接错误或终止信号
             if isinstance(raw_data, dict) and 'error' in raw_data:
                 error_msg = raw_data.get('error', 'Unknown browser error')
-                # 增强：检查错误消息本身是否包含Cloudflare页面
-                if isinstance(error_msg, str) and any(re.search(p, error_msg, re.IGNORECASE) for p in cloudflare_patterns):
-                    friendly_error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
-                    if browser_ws:
-                        try:
-                            await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
-                            logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 在错误消息中检测到CF并已发送刷新指令。")
-                        except Exception as e:
-                            logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
-                    yield 'error', friendly_error_msg
-                else:
-                    yield 'error', error_msg
+                
+                # 增强错误处理
+                if isinstance(error_msg, str):
+                    # 1. 检查 413 附件过大错误
+                    if '413' in error_msg or 'too large' in error_msg.lower():
+                        friendly_error_msg = "上传失败：附件大小超过了 LMArena 服务器的限制 (通常是 5MB左右)。请尝试压缩文件或上传更小的文件。"
+                        logger.warning(f"PROCESSOR [ID: {request_id[:8]}]: 检测到附件过大错误 (413)。")
+                        yield 'error', friendly_error_msg
+                        return
+
+                    # 2. 检查 Cloudflare 验证页面
+                    if any(re.search(p, error_msg, re.IGNORECASE) for p in cloudflare_patterns):
+                        friendly_error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
+                        if browser_ws:
+                            try:
+                                await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
+                                logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 在错误消息中检测到CF并已发送刷新指令。")
+                            except Exception as e:
+                                logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
+                        yield 'error', friendly_error_msg
+                        return
+
+                # 3. 其他未知错误
+                yield 'error', error_msg
                 return
             if raw_data == "[DONE]":
                 break
@@ -739,14 +773,18 @@ async def non_stream_response(request_id: str, model: str):
             # 不要在这里 break，继续等待来自浏览器的 [DONE] 信号，以避免竞态条件
         elif event_type == 'error':
             logger.error(f"NON-STREAM [ID: {request_id[:8]}]: 处理时发生错误: {data}")
+            
+            # 统一流式和非流式响应的错误状态码
+            status_code = 413 if "附件大小超过了" in str(data) else 500
+
             error_response = {
                 "error": {
                     "message": f"[LMArena Bridge Error]: {data}",
                     "type": "bridge_error",
-                    "code": "processing_error"
+                    "code": "attachment_too_large" if status_code == 413 else "processing_error"
                 }
             }
-            return Response(content=json.dumps(error_response, ensure_ascii=False), status_code=500, media_type="application/json")
+            return Response(content=json.dumps(error_response, ensure_ascii=False), status_code=status_code, media_type="application/json")
 
     final_content = "".join(full_content)
     response_data = format_openai_non_stream_response(final_content, model, response_id, reason=finish_reason)
