@@ -459,38 +459,41 @@ def _process_openai_message(message: dict) -> dict:
             elif part.get("type") == "image_url":
                 image_url_data = part.get("image_url", {})
                 url = image_url_data.get("url")
-                # 扩展: 同时支持图片和音频的 base64 上传
+
+                # 新增逻辑：允许客户端通过 detail 字段传递原始文件名
+                # detail 字段是 OpenAI Vision API 的一部分，这里我们复用它
+                original_filename = image_url_data.get("detail")
+
                 if url and url.startswith("data:"):
                     try:
-                        # 从 data URI 中解析 content_type, e.g., "data:image/png;base64,..." -> "image/png"
                         content_type = url.split(';')[0].split(':')[1]
-                        main_type, sub_type = content_type.split('/') if '/' in content_type else ('application', 'octet-stream')
                         
-                        # 根据主要类型确定文件名前缀
-                        if main_type == "image":
-                            prefix = "image"
-                        elif main_type == "audio":
-                            prefix = "audio"
+                        # 如果客户端提供了原始文件名，直接使用它
+                        if original_filename and isinstance(original_filename, str):
+                            file_name = original_filename
+                            logger.info(f"成功处理一个附件 (使用原始文件名): {file_name}")
                         else:
-                            prefix = "file"
-                        
-                        # 优先从 MIME 类型猜测标准文件扩展名
-                        guessed_extension = mimetypes.guess_extension(content_type)
-                        if guessed_extension:
-                            # 移除前导点，例如 '.docx' -> 'docx'
-                            file_extension = guessed_extension.lstrip('.')
-                        else:
-                            # 如果无法猜测，则回退到子类型，但要避免过长的名称
-                            file_extension = sub_type if len(sub_type) < 20 else 'bin'
+                            # 否则，回退到旧的、基于UUID的命名逻辑
+                            main_type, sub_type = content_type.split('/') if '/' in content_type else ('application', 'octet-stream')
+                            
+                            if main_type == "image": prefix = "image"
+                            elif main_type == "audio": prefix = "audio"
+                            else: prefix = "file"
+                            
+                            guessed_extension = mimetypes.guess_extension(content_type)
+                            if guessed_extension:
+                                file_extension = guessed_extension.lstrip('.')
+                            else:
+                                file_extension = sub_type if len(sub_type) < 20 else 'bin'
+                            
+                            file_name = f"{prefix}_{uuid.uuid4()}.{file_extension}"
+                            logger.info(f"成功处理一个附件 (生成文件名): {file_name}")
 
-                        file_name = f"{prefix}_{uuid.uuid4()}.{file_extension}"
-                        
                         attachments.append({
                             "name": file_name,
                             "contentType": content_type,
                             "url": url
                         })
-                        logger.info(f"成功处理一个 {main_type} 附件: {file_name}")
                     except (IndexError, ValueError) as e:
                         logger.warning(f"无法解析的 base64 data URI: {url[:60]}... 错误: {e}")
 
