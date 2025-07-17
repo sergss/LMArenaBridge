@@ -47,6 +47,7 @@ def main():
     source_dir_inner = os.path.join(update_dir, "LMArenaBridge-main")
     config_filename = 'config.jsonc'
     models_filename = 'models.json'
+    model_endpoint_map_filename = 'model_endpoint_map.json'
     
     if not os.path.exists(source_dir_inner):
         print(f"错误：找不到源目录 {source_dir_inner}。更新失败。")
@@ -111,6 +112,9 @@ def main():
             
             if os.path.basename(s) == config_filename:
                 continue # 跳过主配置文件，稍后处理
+            
+            if os.path.basename(s) == model_endpoint_map_filename:
+                continue # 跳过模型端点映射文件，保留用户本地版本
 
             if os.path.isdir(s):
                 shutil.copytree(s, d, dirs_exist_ok=True)
