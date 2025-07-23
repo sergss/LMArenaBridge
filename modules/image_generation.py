@@ -134,7 +134,7 @@ async def generate_single_image(prompt: str, model_name: str, browser_ws) -> str
     if not browser_ws:
         return {"error": "Browser client not connected."}
 
-    target_model_id = MODEL_NAME_TO_ID_MAP.get(model_name, DEFAULT_MODEL_ID)
+    target_model_id = None # 强制 modelId 为 null
     session_id = CONFIG.get("session_id")
     message_id = CONFIG.get("message_id")
 

@@ -372,7 +372,7 @@ async def lifespan(app: FastAPI):
     logger.info("="*60)
 
     check_for_updates() # 检查程序更新
-    load_model_map() # 加载模型ID映射
+    # load_model_map() # 已禁用：不再从 models.json 加载模型 ID
     load_model_endpoint_map() # 加载模型端点映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
 
@@ -544,7 +544,7 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
 
     # 3. 确定目标模型 ID
     model_name = openai_data.get("model", "claude-3-5-sonnet-20241022")
-    target_model_id = MODEL_NAME_TO_ID_MAP.get(model_name, DEFAULT_MODEL_ID)
+    target_model_id = None # 强制 modelId 为 null
     
     # 4. 构建消息模板
     message_templates = []
