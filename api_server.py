@@ -46,7 +46,7 @@ main_event_loop = None # 主事件循环
 # --- 模型映射 ---
 MODEL_NAME_TO_ID_MAP = {}
 MODEL_ENDPOINT_MAP = {} # 新增：用于存储模型到 session/message ID 的映射
-DEFAULT_MODEL_ID = "f44e280a-7914-43ca-a25d-ecfcc5d48d09" # 默认模型: Claude 3.5 Sonnet
+DEFAULT_MODEL_ID = None # 默认模型: Claude 3.5 Sonnet
 
 def load_model_endpoint_map():
     """从 model_endpoint_map.json 加载模型到端点的映射。"""

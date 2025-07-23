@@ -180,7 +180,7 @@ if __name__ == "__main__":
     
     if mode == 'battle':
         last_target = config.get("id_updater_battle_target", "A")
-        target_prompt = f"请选择要更新的消息 [A 或 B] (默认为上次选择的: {last_target}): "
+        target_prompt = f"请选择要更新的消息 [A(使用search模型必须选A) 或 B] (默认为上次选择的: {last_target}): "
         target_choice = input(target_prompt).upper().strip()
 
         if not target_choice:
