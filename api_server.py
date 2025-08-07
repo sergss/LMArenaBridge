@@ -372,7 +372,7 @@ async def lifespan(app: FastAPI):
     logger.info("="*60)
 
     check_for_updates() # 检查程序更新
-    # load_model_map() # 已禁用：不再从 models.json 加载模型 ID
+    load_model_map() # 重新启用模型加载
     load_model_endpoint_map() # 加载模型端点映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
 
@@ -880,7 +880,7 @@ async def get_models():
             {
                 "id": model_name, 
                 "object": "model",
-                "created": int(asyncio.get_event_loop().time()), 
+                "created": int(time.time()),
                 "owned_by": "LMArenaBridge"
             }
             for model_name in MODEL_NAME_TO_ID_MAP.keys()
