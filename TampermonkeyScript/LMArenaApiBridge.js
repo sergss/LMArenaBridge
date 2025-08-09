@@ -250,41 +250,13 @@
     };
 
 
-    // --- 页面加载后发送源码 ---
-    function sendPageSourceAfterLoad() {
-        const sendSource = async () => {
-            console.log("[API Bridge] 页面加载完成。正在发送页面源码以供模型列表更新...");
-            try {
-                const htmlContent = document.documentElement.outerHTML;
-                await fetch('http://localhost:5102/update_models', { // URL与api_server.py中的端点匹配
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'text/html; charset=utf-8'
-                    },
-                    body: htmlContent
-                });
-                 console.log("[API Bridge] 页面源码已成功发送。");
-            } catch (e) {
-                console.error("[API Bridge] 发送页面源码失败:", e);
-            }
-        };
-
-        if (document.readyState === 'complete') {
-            sendSource();
-        } else {
-            window.addEventListener('load', sendSource);
-        }
-    }
-
-
     // --- 启动连接 ---
     console.log("========================================");
-    console.log("  LMArena API Bridge v2.1 正在运行。");
+    console.log("  LMArena API Bridge v2.5 正在运行。");
     console.log("  - 聊天功能已连接到 ws://localhost:5102");
     console.log("  - ID 捕获器将发送到 http://localhost:5103");
     console.log("========================================");
     
-    sendPageSourceAfterLoad(); // 发送页面源码
     connect(); // 建立 WebSocket 连接
 
 })();

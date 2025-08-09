@@ -1,5 +1,5 @@
 {
-  "o3-2025-04-16": [
+  "o3-xxx": [
     {
       "session_id": "b2096d33-2651-4802-97c1-c9b788c01c7a",
       "message_id": "151968ec-b43f-4d0b-a655-e508156af578",
@@ -18,10 +18,20 @@
       "battle_target": "B"
     }
   ],
-  "gemini-1.5-pro-20241022": {
+  "gemini-xxx": {
       "session_id": "session_for_battle_A",
       "message_id": "message_for_battle_A",
       "mode": "battle",
       "battle_target": "A"
+    },
+  "gemini-2.5-pro": {
+      "session_id": "42de2408-2839-4f81-82ac-3acdd724d800",
+      "message_id": "94d6551a-62c8-40f1-91d4-c2d3c203e354",
+      "mode": "direct_chat"
+    },
+  "gpt-5": {
+      "session_id": "898eb0bd-50b6-4f4a-a0ae-c4a54a22f9f3",
+      "message_id": "5184d26a-a483-4983-a8e4-7779a4c6b94f",
+      "mode": "direct_chat"
     }
 }
