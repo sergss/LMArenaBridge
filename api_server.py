@@ -858,50 +858,6 @@ async def update_available_models_endpoint(request: Request):
             content={"status": "error", "message": "Could not extract model data from HTML."}
         )
 
-@app.post("/internal/request_model_update")
-async def request_model_update():
-    """
-    接收来自 model_updater.py 的请求，并通过 WebSocket 指令
-    让油猴脚本发送页面源码。
-    """
-    if not browser_ws:
-        logger.warning("MODEL UPDATE: 收到更新请求，但没有浏览器连接。")
-        raise HTTPException(status_code=503, detail="Browser client not connected.")
-    
-    try:
-        logger.info("MODEL UPDATE: 收到更新请求，正在通过 WebSocket 发送指令...")
-        await browser_ws.send_text(json.dumps({"command": "send_page_source"}))
-        logger.info("MODEL UPDATE: 'send_page_source' 指令已成功发送。")
-        return JSONResponse({"status": "success", "message": "Request to send page source sent."})
-    except Exception as e:
-        logger.error(f"MODEL UPDATE: 发送指令时出错: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to send command via WebSocket.")
-
-@app.post("/internal/update_available_models")
-async def update_available_models_endpoint(request: Request):
-    """
-    接收来自油猴脚本的页面 HTML，提取并更新 available_models.json。
-    """
-    html_content = await request.body()
-    if not html_content:
-        logger.warning("模型更新请求未收到任何 HTML 内容。")
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "No HTML content received."}
-        )
-    
-    logger.info("收到来自油猴脚本的页面内容，开始提取可用模型...")
-    new_models_list = extract_models_from_html(html_content.decode('utf-8'))
-    
-    if new_models_list:
-        save_available_models(new_models_list)
-        return JSONResponse({"status": "success", "message": "Available models file updated."})
-    else:
-        logger.error("未能从油猴脚本提供的 HTML 中提取模型数据。")
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "Could not extract model data from HTML."}
-        )
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
