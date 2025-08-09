@@ -116,6 +116,9 @@ def main():
             if os.path.basename(s) == model_endpoint_map_filename:
                 continue # 跳过模型端点映射文件，保留用户本地版本
 
+            if os.path.basename(s) == models_filename:
+                continue # 跳过 models.json 文件，保留用户本地版本
+
             if os.path.isdir(s):
                 shutil.copytree(s, d, dirs_exist_ok=True)
             else:
