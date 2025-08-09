@@ -44,6 +44,9 @@
                         isCaptureModeActive = true;
                         // 可以选择性地给用户一个视觉提示
                         document.title = "🎯 " + document.title;
+                    } else if (message.command === 'send_page_source') {
+                       console.log("[API Bridge] 收到发送页面源码的指令，正在发送...");
+                       sendPageSource();
                     }
                     return;
                 }
@@ -249,6 +252,23 @@
         return originalFetch.apply(this, args);
     };
 
+
+    // --- 页面源码发送 ---
+    async function sendPageSource() {
+        try {
+            const htmlContent = document.documentElement.outerHTML;
+            await fetch('http://localhost:5102/internal/update_available_models', { // 新的端点
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/html; charset=utf-8'
+                },
+                body: htmlContent
+            });
+             console.log("[API Bridge] 页面源码已成功发送。");
+        } catch (e) {
+            console.error("[API Bridge] 发送页面源码失败:", e);
+        }
+    }
 
     // --- 启动连接 ---
     console.log("========================================");

@@ -1,0 +1,595 @@
+[
+    {
+        "id": "983bc566-b783-4d28-b24c-3c8b08eb1086",
+        "publicName": "gpt-5",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "43390b9c-cf16-4e4e-a1be-3355bb5b6d5e",
+        "publicName": "flux-1-kontext-pro",
+        "organization": "bfl",
+        "provider": "bfl",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "e2d9d353-6dbe-4414-bf87-bd289d523726",
+        "publicName": "gemini-2.5-pro",
+        "organization": "google",
+        "provider": "google",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "6e855f13-55d7-4127-8656-9168a9f4dcc0",
+        "publicName": "gpt-image-1",
+        "organization": "openai",
+        "provider": "customOpenai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "4b11c78c-08c8-461c-938e-5fc97d56a40d",
+        "publicName": "gpt-5-chat",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "0633b1ef-289f-49d4-a834-3d475a25e46b",
+        "publicName": "flux-1-kontext-max",
+        "organization": "bfl",
+        "provider": "bfl",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "ee116d12-64d6-48a8-88e5-b2d06325cdd2",
+        "publicName": "claude-opus-4-20250514",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "ce2092c1-28d4-4d42-a1e0-6b061dfe0b20",
+        "publicName": "gemini-2.5-flash",
+        "organization": "google",
+        "provider": "google",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "cb0f1e24-e8e9-4745-aabc-b926ffde7475",
+        "publicName": "o3-2025-04-16",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "9513524d-882e-4350-b31e-e4584440c2c8",
+        "publicName": "chatgpt-4o-latest-20250326",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "0f785ba1-efcb-472d-961e-69f7b251c7e3",
+        "publicName": "command-a-03-2025",
+        "organization": "cohere",
+        "provider": "cohere",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "6a5437a7-c786-467b-b701-17b0bc8c8231",
+        "publicName": "gpt-4.1-mini-2025-04-14",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "a14546b5-d78d-4cf6-bb61-ab5b8510a9d6",
+        "publicName": "amazon.nova-pro-v1:0",
+        "organization": "amazon",
+        "provider": "amazonBedrock",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "c680645e-efac-4a81-b0af-da16902b2541",
+        "publicName": "o3-mini",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "7699c8d4-0742-42f9-a117-d10e84688dab",
+        "publicName": "grok-3-mini-beta",
+        "organization": "xai",
+        "provider": "xaiPublic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "30ab90f5-e020-4f83-aff5-f750d2e78769",
+        "publicName": "deepseek-r1-0528",
+        "organization": "deepseek",
+        "provider": "deepseek",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "f1102bbf-34ca-468f-a9fc-14bcf63f315b",
+        "publicName": "o4-mini-2025-04-16",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "04ec9a17-c597-49df-acf0-963da275c246",
+        "publicName": "gemini-2.5-flash-lite-preview-06-17-thinking",
+        "organization": "google",
+        "provider": "google",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "d799a034-0ab6-48c1-817a-62e591143f39",
+        "publicName": "amazon-nova-experimental-chat-05-14",
+        "organization": "amazon",
+        "provider": "amazon",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "be98fcfd-345c-4ae1-9a82-a19123ebf1d2",
+        "publicName": "claude-3-7-sonnet-20250219-thinking-32k",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "f6fbf06c-532c-4c8a-89c7-f3ddcfb34bd1",
+        "publicName": "claude-3-5-haiku-20241022",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "27b9f8c6-3ee1-464a-9479-a8b3c2a48fd4",
+        "publicName": "mistral-medium-2505",
+        "organization": "mistral",
+        "provider": "mistral",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "51ad1d79-61e2-414c-99e3-faeb64bb6b1b",
+        "publicName": "imagen-3.0-generate-002",
+        "organization": "google",
+        "provider": "googleVertex",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "2f5253e4-75be-473c-bcfc-baeb3df0f8ad",
+        "publicName": "deepseek-v3-0324",
+        "organization": "deepseek",
+        "provider": "fireworks",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "36e4900d-5df2-46e1-9bd3-ef4028ab50b0",
+        "publicName": "velocilux",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "9719f0d8-c378-4058-9ef4-a3f04e671ac1",
+        "publicName": "dino",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "6337f479-2fc8-4311-a76b-8c957765cd68",
+        "publicName": "magistral-medium-2506",
+        "organization": "mistral",
+        "provider": "mistral",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "34ee5a83-8d85-4d8b-b2c1-3b3413e9ed98",
+        "publicName": "ideogram-v2",
+        "organization": "Ideogram",
+        "provider": "replicate",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "17e31227-36d7-4a7a-943a-7ebffa3a00eb",
+        "publicName": "photon",
+        "organization": "luma-ai",
+        "provider": "replicate",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "b5ad3ab7-fc56-4ecd-8921-bd56b55c1159",
+        "publicName": "llama-4-maverick-17b-128e-instruct",
+        "organization": "meta",
+        "provider": "fireworks",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "9a066f6a-7205-4325-8d0b-d81cc4b049c0",
+        "publicName": "qwen3-30b-a3b",
+        "organization": "alibaba",
+        "provider": "alibaba",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "39b185cb-aba9-4232-99ea-074883a5ccd4",
+        "publicName": "stephen-v2",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "2595a594-fa54-4299-97cd-2d7380d21c80",
+        "publicName": "qwen3-235b-a22b",
+        "organization": "alibaba",
+        "provider": "alibaba",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "dcbd7897-5a37-4a34-93f1-76a24c7bb028",
+        "publicName": "llama-3.3-70b-instruct",
+        "organization": "meta",
+        "provider": "fireworks",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "34c89088-1c15-4cff-96fd-52ced7a4d5a9",
+        "publicName": "cogitolux",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "ac44dd10-0666-451c-b824-386ccfea7bcc",
+        "publicName": "claude-sonnet-4-20250514",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "38abc02f-5cf2-49d1-a243-b2eb75ca3cc8",
+        "publicName": "potato",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "c5a11495-081a-4dc6-8d9a-64a4fd6f7bbc",
+        "publicName": "claude-3-7-sonnet-20250219",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "87e8d160-049e-4b4e-adc4-7f2511348539",
+        "publicName": "minimax-m1",
+        "organization": "minimax",
+        "provider": "minimax",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "bb97bc68-131c-4ea4-a59e-03a6252de0d2",
+        "publicName": "dall-e-3",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    }
+]

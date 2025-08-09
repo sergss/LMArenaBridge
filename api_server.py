@@ -178,6 +178,74 @@ def check_for_updates():
     except Exception as e:
         logger.error(f"检查更新时发生未知错误: {e}")
 
+# --- 模型更新 ---
+def extract_models_from_html(html_content):
+    """
+    从 HTML 内容中提取完整的模型JSON对象，使用括号匹配确保完整性。
+    """
+    models = []
+    model_names = set()
+    
+    # 查找所有可能的模型JSON对象的起始位置
+    for start_match in re.finditer(r'\{\\"id\\":\\"[a-f0-9-]+\\"', html_content):
+        start_index = start_match.start()
+        
+        # 从起始位置开始，进行花括号匹配
+        open_braces = 0
+        end_index = -1
+        
+        # 优化：设置一个合理的搜索上限，避免无限循环
+        search_limit = start_index + 10000 # 假设一个模型定义不会超过10000个字符
+        
+        for i in range(start_index, min(len(html_content), search_limit)):
+            if html_content[i] == '{':
+                open_braces += 1
+            elif html_content[i] == '}':
+                open_braces -= 1
+                if open_braces == 0:
+                    end_index = i + 1
+                    break
+        
+        if end_index != -1:
+            # 提取完整的、转义的JSON字符串
+            json_string_escaped = html_content[start_index:end_index]
+            
+            # 反转义
+            json_string = json_string_escaped.replace('\\"', '"').replace('\\\\', '\\')
+            
+            try:
+                model_data = json.loads(json_string)
+                model_name = model_data.get('publicName')
+                
+                # 使用publicName去重
+                if model_name and model_name not in model_names:
+                    models.append(model_data)
+                    model_names.add(model_name)
+            except json.JSONDecodeError as e:
+                logger.warning(f"解析提取的JSON对象时出错: {e} - 内容: {json_string[:150]}...")
+                continue
+
+    if models:
+        logger.info(f"成功提取并解析了 {len(models)} 个独立模型。")
+        return models
+    else:
+        logger.error("错误：在HTML响应中找不到任何匹配的完整模型JSON对象。")
+        return None
+
+def save_available_models(new_models_list, models_path="available_models.json"):
+    """
+    将提取到的完整模型对象列表保存到指定的JSON文件中。
+    """
+    logger.info(f"检测到 {len(new_models_list)} 个模型，正在更新 '{models_path}'...")
+    
+    try:
+        with open(models_path, 'w', encoding='utf-8') as f:
+            # 直接将完整的模型对象列表写入文件
+            json.dump(new_models_list, f, indent=4, ensure_ascii=False)
+        logger.info(f"✅ '{models_path}' 已成功更新，包含 {len(new_models_list)} 个模型。")
+    except IOError as e:
+        logger.error(f"❌ 写入 '{models_path}' 文件时出错: {e}")
+
 # --- 自动重启逻辑 ---
 def restart_server():
     """优雅地通知客户端刷新，然后重启服务器。"""
@@ -838,6 +906,51 @@ async def chat_completions(request: Request):
         logger.warning(f"请求的模型 '{model_name}' 不在 models.json 中，将使用默认模型ID。")
 
     request_id = str(uuid.uuid4())
+@app.post("/internal/request_model_update")
+async def request_model_update():
+    """
+    接收来自 model_updater.py 的请求，并通过 WebSocket 指令
+    让油猴脚本发送页面源码。
+    """
+    if not browser_ws:
+        logger.warning("MODEL UPDATE: 收到更新请求，但没有浏览器连接。")
+        raise HTTPException(status_code=503, detail="Browser client not connected.")
+    
+    try:
+        logger.info("MODEL UPDATE: 收到更新请求，正在通过 WebSocket 发送指令...")
+        await browser_ws.send_text(json.dumps({"command": "send_page_source"}))
+        logger.info("MODEL UPDATE: 'send_page_source' 指令已成功发送。")
+        return JSONResponse({"status": "success", "message": "Request to send page source sent."})
+    except Exception as e:
+        logger.error(f"MODEL UPDATE: 发送指令时出错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send command via WebSocket.")
+
+@app.post("/internal/update_available_models")
+async def update_available_models_endpoint(request: Request):
+    """
+    接收来自油猴脚本的页面 HTML，提取并更新 available_models.json。
+    """
+    html_content = await request.body()
+    if not html_content:
+        logger.warning("模型更新请求未收到任何 HTML 内容。")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "No HTML content received."}
+        )
+    
+    logger.info("收到来自油猴脚本的页面内容，开始提取可用模型...")
+    new_models_list = extract_models_from_html(html_content.decode('utf-8'))
+    
+    if new_models_list:
+        save_available_models(new_models_list)
+        return JSONResponse({"status": "success", "message": "Available models file updated."})
+    else:
+        logger.error("未能从油猴脚本提供的 HTML 中提取模型数据。")
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Could not extract model data from HTML."}
+        )
+
     response_channels[request_id] = asyncio.Queue()
     logger.info(f"API CALL [ID: {request_id[:8]}]: 已创建响应通道。")
 
