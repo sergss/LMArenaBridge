@@ -1,4 +1,4 @@
-# 🚀 LMArena Bridge - 新一代 OpenAI 桥接器 🌉
+# 🚀 LMArena Bridge - AI模型竞技场API反代器 🌉
 
 欢迎来到新一代的 LMArena Bridge！🎉 这是一个基于 FastAPI 和 WebSocket 的高性能工具集，它能让你通过任何兼容 OpenAI API 的客户端或应用程序，无缝使用 [LMArena.ai](https://lmarena.ai/) 平台上提供的海量大语言模型。
 
@@ -35,7 +35,6 @@
     *   **图像生成模型**: `"model-name": "model-id:image"`
 *   **说明**:
     *   程序通过检查模型ID字符串中是否包含 `:image` 来识别图像模型。
-    *   如果模型是纯粹的文生图模型（没有自己的ID），可以使用 `null` 作为占位符，例如：`"dall-e-3": "null:image"`。
     *   这种格式保持了对旧配置文件的最大兼容性，未指定类型的模型将默认为 `"text"`。
 *   **示例**:
     ```json
