@@ -1,20 +1,5 @@
 [
     {
-        "id": "983bc566-b783-4d28-b24c-3c8b08eb1086",
-        "publicName": "gpt-5",
-        "organization": "openai",
-        "provider": "openai",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true,
-                "image": true
-            },
-            "outputCapabilities": {
-                "text": true
-            }
-        }
-    },
-    {
         "id": "43390b9c-cf16-4e4e-a1be-3355bb5b6d5e",
         "publicName": "flux-1-kontext-pro",
         "organization": "bfl",
@@ -30,6 +15,21 @@
                         "1:1"
                     ]
                 }
+            }
+        }
+    },
+    {
+        "id": "983bc566-b783-4d28-b24c-3c8b08eb1086",
+        "publicName": "gpt-5-high",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
             }
         }
     },
@@ -83,6 +83,20 @@
         }
     },
     {
+        "id": "ee116d12-64d6-48a8-88e5-b2d06325cdd2",
+        "publicName": "claude-opus-4-20250514",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
         "id": "0633b1ef-289f-49d4-a834-3d475a25e46b",
         "publicName": "flux-1-kontext-max",
         "organization": "bfl",
@@ -98,20 +112,6 @@
                         "1:1"
                     ]
                 }
-            }
-        }
-    },
-    {
-        "id": "ee116d12-64d6-48a8-88e5-b2d06325cdd2",
-        "publicName": "claude-opus-4-20250514",
-        "organization": "anthropic",
-        "provider": "googleVertexAnthropic",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "text": true
             }
         }
     },
@@ -154,6 +154,18 @@
             "inputCapabilities": {
                 "text": true,
                 "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "3f4de29d-1b42-4af8-9f50-74e3fcd3f56c",
+        "publicName": "phantom-0725-1",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
             },
             "outputCapabilities": {
                 "text": true
@@ -521,6 +533,18 @@
         }
     },
     {
+        "id": "4ce4e11e-0bed-4441-a2e8-7ce79b88400e",
+        "publicName": "folsom-0805-1",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
         "id": "ac44dd10-0666-451c-b824-386ccfea7bcc",
         "publicName": "claude-sonnet-4-20250514",
         "organization": "anthropic",
@@ -787,24 +811,6 @@
         }
     },
     {
-        "id": "282be57e-6c2c-4772-ab4c-75cde1291c54",
-        "publicName": "qwen-image",
-        "organization": "alibaba",
-        "provider": "fal",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "image": {
-                    "aspectRatios": [
-                        "1:1"
-                    ]
-                }
-            }
-        }
-    },
-    {
         "id": "b9edb8e9-4e98-49e7-8aaf-ae67e9797a11",
         "publicName": "grok-4-0709",
         "organization": "xai",
@@ -838,20 +844,6 @@
         "publicName": "ppl-sonar-reasoning-pro-high",
         "organization": "perplexity",
         "provider": "perplexity",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "search": true
-            }
-        }
-    },
-    {
-        "id": "14dbdb19-708f-4210-8e12-ce52b5c5296a",
-        "publicName": "api-gpt-4o-search",
-        "organization": "openai",
-        "provider": "openai",
         "capabilities": {
             "inputCapabilities": {
                 "text": true
@@ -996,20 +988,6 @@
         }
     },
     {
-        "id": "7a3626fc-4e64-4c9e-821f-b449a4b43b6a",
-        "publicName": "kimi-k2-0711-preview",
-        "organization": "moonshot",
-        "provider": "moonshot",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "text": true
-            }
-        }
-    },
-    {
         "id": "ec3beb4b-7229-4232-bab9-670ee52dd711",
         "publicName": "gpt-oss-20b",
         "organization": "openai",
@@ -1087,6 +1065,21 @@
         "capabilities": {
             "inputCapabilities": {
                 "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "1ea13a81-93a7-4804-bcdd-693cd72e302d",
+        "publicName": "step-3",
+        "organization": "stepfun",
+        "provider": "stepfun",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
             },
             "outputCapabilities": {
                 "text": true
@@ -1343,21 +1336,6 @@
         }
     },
     {
-        "id": "5fd3caa8-fe4c-41a5-a22c-0025b58f4b42",
-        "publicName": "gpt-5-mini",
-        "organization": "openai",
-        "provider": "openai",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true,
-                "image": true
-            },
-            "outputCapabilities": {
-                "text": true
-            }
-        }
-    },
-    {
         "id": "9bbbca46-b6c2-4919-83a8-87ef1c559c4e",
         "publicName": "veo3-fast-audio",
         "organization": "google",
@@ -1369,18 +1347,6 @@
             },
             "outputCapabilities": {
                 "video": true
-            }
-        }
-    },
-    {
-        "id": "ab5d0f95-bee8-43cd-8bd5-75201dfd3122",
-        "publicName": "phantom-0728-1",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "text": true
             }
         }
     },
@@ -1419,6 +1385,76 @@
         }
     },
     {
+        "id": "f1a2eb6f-fc30-4806-9e00-1efd0d73cbc4",
+        "publicName": "claude-opus-4-1-20250805-thinking-16k",
+        "organization": "anthropic",
+        "provider": "googleVertexAnthropic",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "e9dd5a96-c066-48b0-869f-eb762030b5ed",
+        "publicName": "EB45-turbo",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "c3d0e5c8-f4b3-417a-8cb8-2ccf757d3869",
+        "publicName": "sora",
+        "organization": "openai",
+        "provider": "azureOpenAI",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "video": true
+            }
+        }
+    },
+    {
+        "id": "5fd3caa8-fe4c-41a5-a22c-0025b58f4b42",
+        "publicName": "gpt-5-mini-high",
+        "organization": "openai",
+        "provider": "openai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "9dab0475-a0cc-4524-84a2-3fd25aa8c768",
+        "publicName": "glm-4.5v",
+        "organization": "zai",
+        "provider": "zai",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
         "id": "ba8c2392-4c47-42af-bfee-c6c057615a91",
         "publicName": "hunyuan-t1-20250711",
         "organization": "tencent",
@@ -1433,48 +1469,22 @@
         }
     },
     {
-        "id": "c3d0e5c8-f4b3-417a-8cb8-2ccf757d3869",
-        "publicName": "sora-1",
-        "organization": "openai",
-        "provider": "azureOpenAI",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "video": true
-            }
-        }
-    },
-    {
-        "id": "c384554a-7667-4764-b740-1e3087f70fb6",
-        "publicName": "claude-opus-4-1-20250805-thinking-16k",
+        "id": "d942b564-191c-41c5-ae22-400a930a2cfe",
+        "publicName": "claude-opus-4-1-search",
         "organization": "anthropic",
-        "provider": "googleVertexAnthropic",
+        "provider": "anthropicSearch",
         "capabilities": {
             "inputCapabilities": {
                 "text": true
             },
             "outputCapabilities": {
-                "text": true
-            }
-        }
-    },
-    {
-        "id": "7306b392-5b80-41c8-b583-bba01dac9df1",
-        "publicName": "phantom-0731-2",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true
-            },
-            "outputCapabilities": {
-                "text": true
+                "search": true
             }
         }
     },
     {
         "id": "2dc249b3-98da-44b4-8d1e-6666346a8012",
-        "publicName": "gpt-5-nano",
+        "publicName": "gpt-5-nano-high",
         "organization": "openai",
         "provider": "openai",
         "capabilities": {
@@ -1484,6 +1494,72 @@
             },
             "outputCapabilities": {
                 "text": true
+            }
+        }
+    },
+    {
+        "id": "231e684e-55e7-4bfb-b124-767ed19ba1aa",
+        "publicName": "qwen-image",
+        "organization": "alibaba",
+        "provider": "alibaba",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "e4e58f18-c04f-47cd-8d11-4b2ece7b617e",
+        "publicName": "nano-banana",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": true
+            },
+            "outputCapabilities": {
+                "image": {
+                    "aspectRatios": [
+                        "1:1"
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "id": "d14d9b23-1e46-4659-b157-a3804ba7e2ef",
+        "publicName": "gpt-5-search",
+        "organization": "openai",
+        "provider": "openaiResponses",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "search": true
+            }
+        }
+    },
+    {
+        "id": "c382b9c6-d31b-488e-86c1-e84d8427eb30",
+        "publicName": "hailuo-02-fast",
+        "organization": "minimax",
+        "provider": "minimax",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true,
+                "image": {
+                    "requiresUpload": true
+                }
+            },
+            "outputCapabilities": {
+                "video": true
             }
         }
     },
@@ -1502,29 +1578,14 @@
         }
     },
     {
-        "id": "8861cc0d-d42c-4746-84ee-70b14105b27b",
-        "publicName": "phantom-0731-1",
+        "id": "b9ef9761-3e83-43cf-96d9-38af85ef1bd9",
+        "publicName": "phantom-0728-1",
         "capabilities": {
             "inputCapabilities": {
                 "text": true
             },
             "outputCapabilities": {
                 "text": true
-            }
-        }
-    },
-    {
-        "id": "c382b9c6-d31b-488e-86c1-e84d8427eb30",
-        "publicName": "hailuo-02-fast",
-        "organization": "minimax",
-        "provider": "minimax",
-        "capabilities": {
-            "inputCapabilities": {
-                "text": true,
-                "image": true
-            },
-            "outputCapabilities": {
-                "video": true
             }
         }
     },
@@ -1579,6 +1640,18 @@
         }
     },
     {
+        "id": "14a215fb-8a16-48f8-b9bd-1fd7b6c2a1a7",
+        "publicName": "phantom-0731-1",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
         "id": "44882393-edb8-468f-9a39-d13d961ae364",
         "publicName": "step1x-edit",
         "capabilities": {
@@ -1620,6 +1693,18 @@
             "inputCapabilities": {
                 "text": true,
                 "image": true
+            },
+            "outputCapabilities": {
+                "text": true
+            }
+        }
+    },
+    {
+        "id": "3794ecd7-b370-4894-830b-6dac96ced1bd",
+        "publicName": "phantom-0731-2",
+        "capabilities": {
+            "inputCapabilities": {
+                "text": true
             },
             "outputCapabilities": {
                 "text": true

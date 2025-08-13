@@ -23,8 +23,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 
-# --- 导入自定义模块 ---
-from modules import image_generation
 
 # --- 基础配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,6 +42,7 @@ idle_monitor_thread = None # 空闲监控线程
 main_event_loop = None # 主事件循环
 
 # --- 模型映射 ---
+# MODEL_NAME_TO_ID_MAP 现在将存储更丰富的对象： { "model_name": {"id": "...", "type": "..."} }
 MODEL_NAME_TO_ID_MAP = {}
 MODEL_ENDPOINT_MAP = {} # 新增：用于存储模型到 session/message ID 的映射
 DEFAULT_MODEL_ID = None # 默认模型id: None
@@ -86,12 +85,26 @@ def load_config():
         CONFIG = {}
 
 def load_model_map():
-    """从 models.json 加载模型映射。"""
+    """从 models.json 加载模型映射，支持 'id:type' 格式。"""
     global MODEL_NAME_TO_ID_MAP
     try:
         with open('models.json', 'r', encoding='utf-8') as f:
-            MODEL_NAME_TO_ID_MAP = json.load(f)
-        logger.info(f"成功从 'models.json' 加载了 {len(MODEL_NAME_TO_ID_MAP)} 个模型。")
+            raw_map = json.load(f)
+            
+        processed_map = {}
+        for name, value in raw_map.items():
+            if isinstance(value, str) and ':' in value:
+                parts = value.split(':', 1)
+                model_id = parts[0] if parts[0].lower() != 'null' else None
+                model_type = parts[1]
+                processed_map[name] = {"id": model_id, "type": model_type}
+            else:
+                # 默认或旧格式处理
+                processed_map[name] = {"id": value, "type": "text"}
+
+        MODEL_NAME_TO_ID_MAP = processed_map
+        logger.info(f"成功从 'models.json' 加载并解析了 {len(MODEL_NAME_TO_ID_MAP)} 个模型。")
+
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.error(f"加载 'models.json' 失败: {e}。将使用空模型列表。")
         MODEL_NAME_TO_ID_MAP = {}
@@ -335,14 +348,6 @@ async def lifespan(app: FastAPI):
         idle_monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
         idle_monitor_thread.start()
         
-    # --- 初始化自定义模块 ---
-    image_generation.initialize_image_module(
-        app_logger=logger,
-        channels=response_channels,
-        app_config=CONFIG,
-        model_map=MODEL_NAME_TO_ID_MAP,
-        default_model_id=DEFAULT_MODEL_ID
-    )
 
     yield
     logger.info("服务器正在关闭。")
@@ -495,8 +500,14 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
 
     # 3. 确定目标模型 ID
     model_name = openai_data.get("model", "claude-3-5-sonnet-20241022")
-    # 从加载的 `models.json` 映射中查找模型 ID
-    target_model_id = MODEL_NAME_TO_ID_MAP.get(model_name)
+    model_info = MODEL_NAME_TO_ID_MAP.get(model_name)
+    
+    target_model_id = None
+    if model_info:
+        target_model_id = model_info.get("id")
+    else:
+        logger.warning(f"模型 '{model_name}' 在 'models.json' 中未找到。请求将不带特定模型ID发送。")
+
     if not target_model_id:
         logger.warning(f"模型 '{model_name}' 在 'models.json' 中未找到对应的ID。请求将不带特定模型ID发送。")
 
@@ -509,9 +520,11 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
             "attachments": msg.get("attachments", [])
         })
 
-    # 5. 应用绕过模式 (Bypass Mode)
-    if CONFIG.get("bypass_enabled"):
+    # 5. 应用绕过模式 (Bypass Mode) - 仅对文本模型生效
+    model_type = model_info.get("type", "text")
+    if CONFIG.get("bypass_enabled") and model_type == "text":
         # 绕过模式总是添加一个 position 'a' 的用户消息
+        logger.info("绕过模式已启用，正在注入一个空的用户消息。")
         message_templates.append({"role": "user", "content": " ", "participantPosition": "a", "attachments": []})
 
     # 6. 应用参与者位置 (Participant Position)
@@ -601,6 +614,8 @@ async def _process_lmarena_stream(request_id: str):
     buffer = ""
     timeout = CONFIG.get("stream_response_timeout_seconds",360)
     text_pattern = re.compile(r'[ab]0:"((?:\\.|[^"\\])*)"')
+    # 新增：用于匹配和提取图片URL的正则表达式
+    image_pattern = re.compile(r'[ab]2:(\[.*?\])')
     finish_pattern = re.compile(r'[ab]d:(\{.*?"finishReason".*?\})')
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
     cloudflare_patterns = [r'<title>Just a moment...</title>', r'Enable JavaScript and cookies to continue']
@@ -665,11 +680,26 @@ async def _process_lmarena_stream(request_id: str):
                     return
                 except json.JSONDecodeError: pass
 
+            # 优先处理文本内容
             while (match := text_pattern.search(buffer)):
                 try:
                     text_content = json.loads(f'"{match.group(1)}"')
                     if text_content: yield 'content', text_content
                 except (ValueError, json.JSONDecodeError): pass
+                buffer = buffer[match.end():]
+
+            # 新增：处理图片内容
+            while (match := image_pattern.search(buffer)):
+                try:
+                    image_data_list = json.loads(match.group(1))
+                    if isinstance(image_data_list, list) and image_data_list:
+                        image_info = image_data_list[0]
+                        if image_info.get("type") == "image" and "image" in image_info:
+                            # 将URL包装成Markdown格式并作为内容块yield
+                            markdown_image = f"![Image]({image_info['image']})"
+                            yield 'content', markdown_image
+                except (json.JSONDecodeError, IndexError) as e:
+                    logger.warning(f"解析图片URL时出错: {e}, buffer: {buffer[:150]}")
                 buffer = buffer[match.end():]
 
             if (finish_match := finish_pattern.search(buffer)):
@@ -870,6 +900,25 @@ async def chat_completions(request: Request):
     last_activity_time = datetime.now() # 更新活动时间
     logger.info(f"API请求已收到，活动时间已更新为: {last_activity_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
+    try:
+        openai_req = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
+
+    model_name = openai_req.get("model")
+    model_info = MODEL_NAME_TO_ID_MAP.get(model_name, {})
+    model_type = model_info.get("type", "text") # 默认为 text
+
+    # --- 新增：基于模型类型的判断逻辑 ---
+    if model_type == 'image':
+        logger.info(f"检测到模型 '{model_name}' 类型为 'image'，将通过主聊天接口处理。")
+        # 对于图像模型，我们不再调用独立的处理器，而是复用主聊天逻辑，
+        # 因为 _process_lmarena_stream 现在已经能处理图片数据。
+        # 这意味着图像生成现在原生支持流式和非流式响应。
+        pass # 继续执行下面的通用聊天逻辑
+    # --- 文生图逻辑结束 ---
+
+    # 如果不是图像模型，则执行正常的文本生成逻辑
     load_config()  # 实时加载最新配置，确保会话ID等信息是最新的
     # --- API Key 验证 ---
     api_key = CONFIG.get("api_key")
@@ -891,13 +940,7 @@ async def chat_completions(request: Request):
     if not browser_ws:
         raise HTTPException(status_code=503, detail="油猴脚本客户端未连接。请确保 LMArena 页面已打开并激活脚本。")
 
-    try:
-        openai_req = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
-
     # --- 模型与会话ID映射逻辑 ---
-    model_name = openai_req.get("model")
     session_id, message_id = None, None
     mode_override, battle_target_override = None, None
 
@@ -993,21 +1036,6 @@ async def chat_completions(request: Request):
             del response_channels[request_id]
         logger.error(f"API CALL [ID: {request_id[:8]}]: 处理请求时发生致命错误: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/v1/images/generations")
-async def images_generations(request: Request):
-    """
-    处理文生图请求。
-    该端点接收 OpenAI 格式的图像生成请求，并返回相应的图像 URL。
-    """
-    global last_activity_time
-    last_activity_time = datetime.now()
-    logger.info(f"文生图 API 请求已收到，活动时间已更新为: {last_activity_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # 模块已经通过 `initialize_image_module` 初始化，可以直接调用
-    response_data, status_code = await image_generation.handle_image_generation_request(request, browser_ws)
-    
-    return JSONResponse(content=response_data, status_code=status_code)
 
 # --- 内部通信端点 ---
 @app.post("/internal/start_id_capture")
