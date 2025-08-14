@@ -1019,7 +1019,7 @@ async def chat_completions(request: Request):
         await browser_ws.send_text(json.dumps(message_to_browser))
 
         # 4. 根据 stream 参数决定返回类型
-        is_stream = openai_req.get("stream", True)
+        is_stream = openai_req.get("stream", False)
 
         if is_stream:
             # 返回流式响应
