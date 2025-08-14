@@ -500,7 +500,7 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
 
     # 3. 确定目标模型 ID
     model_name = openai_data.get("model", "claude-3-5-sonnet-20241022")
-    model_info = MODEL_NAME_TO_ID_MAP.get(model_name)
+    model_info = MODEL_NAME_TO_ID_MAP.get(model_name, {}) # 关键修复：确保 model_info 总是一个字典
     
     target_model_id = None
     if model_info:
@@ -906,7 +906,7 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
 
     model_name = openai_req.get("model")
-    model_info = MODEL_NAME_TO_ID_MAP.get(model_name, {})
+    model_info = MODEL_NAME_TO_ID_MAP.get(model_name, {}) # 关键修复：如果模型未找到，返回一个空字典而不是None
     model_type = model_info.get("type", "text") # 默认为 text
 
     # --- 新增：基于模型类型的判断逻辑 ---
