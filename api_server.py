@@ -40,6 +40,9 @@ response_channels: dict[str, asyncio.Queue] = {}
 last_activity_time = None # 记录最后一次活动的时间
 idle_monitor_thread = None # 空闲监控线程
 main_event_loop = None # 主事件循环
+# 新增：用于跟踪是否因人机验证而刷新
+IS_REFRESHING_FOR_VERIFICATION = False
+
 
 # --- 模型映射 ---
 # MODEL_NAME_TO_ID_MAP 现在将存储更丰富的对象： { "model_name": {"id": "...", "type": "..."} }
@@ -605,6 +608,7 @@ async def _process_lmarena_stream(request_id: str):
     核心内部生成器：处理来自浏览器的原始数据流，并产生结构化事件。
     事件类型: ('content', str), ('finish', str), ('error', str)
     """
+    global IS_REFRESHING_FOR_VERIFICATION
     queue = response_channels.get(request_id)
     if not queue:
         logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 无法找到响应通道。")
@@ -619,6 +623,8 @@ async def _process_lmarena_stream(request_id: str):
     finish_pattern = re.compile(r'[ab]d:(\{.*?"finishReason".*?\})')
     error_pattern = re.compile(r'(\{\s*"error".*?\})', re.DOTALL)
     cloudflare_patterns = [r'<title>Just a moment...</title>', r'Enable JavaScript and cookies to continue']
+    
+    has_yielded_content = False # 标记是否已产出过有效内容
 
     try:
         while True:
@@ -629,48 +635,47 @@ async def _process_lmarena_stream(request_id: str):
                 yield 'error', f'Response timed out after {timeout} seconds.'
                 return
 
-            # 1. 检查来自 WebSocket 端的直接错误或终止信号
+            # --- Cloudflare 人机验证处理 ---
+            def handle_cloudflare_verification():
+                global IS_REFRESHING_FOR_VERIFICATION
+                if not IS_REFRESHING_FOR_VERIFICATION:
+                    logger.warning(f"PROCESSOR [ID: {request_id[:8]}]: 首次检测到人机验证，将发送刷新指令。")
+                    IS_REFRESHING_FOR_VERIFICATION = True
+                    if browser_ws:
+                        asyncio.create_task(browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False)))
+                    return "检测到人机验证，已发送刷新指令，请稍后重试。"
+                else:
+                    logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 检测到人机验证，但已在刷新中，将等待。")
+                    return "正在等待人机验证完成..."
+
+            # 1. 检查来自 WebSocket 端的直接错误
             if isinstance(raw_data, dict) and 'error' in raw_data:
                 error_msg = raw_data.get('error', 'Unknown browser error')
-                
-                # 增强错误处理
                 if isinstance(error_msg, str):
-                    # 1. 检查 413 附件过大错误
                     if '413' in error_msg or 'too large' in error_msg.lower():
                         friendly_error_msg = "上传失败：附件大小超过了 LMArena 服务器的限制 (通常是 5MB左右)。请尝试压缩文件或上传更小的文件。"
                         logger.warning(f"PROCESSOR [ID: {request_id[:8]}]: 检测到附件过大错误 (413)。")
                         yield 'error', friendly_error_msg
                         return
-
-                    # 2. 检查 Cloudflare 验证页面
                     if any(re.search(p, error_msg, re.IGNORECASE) for p in cloudflare_patterns):
-                        friendly_error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
-                        if browser_ws:
-                            try:
-                                await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
-                                logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 在错误消息中检测到CF并已发送刷新指令。")
-                            except Exception as e:
-                                logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
-                        yield 'error', friendly_error_msg
+                        yield 'error', handle_cloudflare_verification()
                         return
-
-                # 3. 其他未知错误
                 yield 'error', error_msg
                 return
+
+            # 2. 检查 [DONE] 信号
             if raw_data == "[DONE]":
+                # 如果产出了有效内容，说明这次请求是成功的
+                if has_yielded_content and IS_REFRESHING_FOR_VERIFICATION:
+                    logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 请求成功完成，重置人机验证状态。")
+                    IS_REFRESHING_FOR_VERIFICATION = False
                 break
 
+            # 3. 累加缓冲区并检查内容
             buffer += "".join(str(item) for item in raw_data) if isinstance(raw_data, list) else raw_data
 
             if any(re.search(p, buffer, re.IGNORECASE) for p in cloudflare_patterns):
-                error_msg = "检测到 Cloudflare 人机验证页面。请在浏览器中刷新 LMArena 页面并手动完成验证，然后重试请求。"
-                if browser_ws:
-                    try:
-                        await browser_ws.send_text(json.dumps({"command": "refresh"}, ensure_ascii=False))
-                        logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 已向浏览器发送页面刷新指令。")
-                    except Exception as e:
-                        logger.error(f"PROCESSOR [ID: {request_id[:8]}]: 发送刷新指令失败: {e}")
-                yield 'error', error_msg
+                yield 'error', handle_cloudflare_verification()
                 return
             
             if (error_match := error_pattern.search(buffer)):
@@ -684,7 +689,9 @@ async def _process_lmarena_stream(request_id: str):
             while (match := text_pattern.search(buffer)):
                 try:
                     text_content = json.loads(f'"{match.group(1)}"')
-                    if text_content: yield 'content', text_content
+                    if text_content:
+                        has_yielded_content = True
+                        yield 'content', text_content
                 except (ValueError, json.JSONDecodeError): pass
                 buffer = buffer[match.end():]
 
