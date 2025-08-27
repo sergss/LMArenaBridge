@@ -112,6 +112,35 @@ def load_model_map():
         logger.error(f"加载 'models.json' 失败: {e}。将使用空模型列表。")
         MODEL_NAME_TO_ID_MAP = {}
 
+# --- 公告处理 ---
+def check_and_display_announcement():
+    """检查并显示一次性公告。"""
+    announcement_file = "announcement-lmarena.json"
+    if os.path.exists(announcement_file):
+        try:
+            logger.info("="*60)
+            logger.info("📢 检测到更新公告，内容如下:")
+            with open(announcement_file, 'r', encoding='utf-8') as f:
+                announcement = json.load(f)
+                title = announcement.get("title", "公告")
+                content = announcement.get("content", [])
+                
+                logger.info(f"   --- {title} ---")
+                for line in content:
+                    logger.info(f"   {line}")
+                logger.info("="*60)
+
+        except json.JSONDecodeError:
+            logger.error(f"无法解析公告文件 '{announcement_file}'。文件内容可能不是有效的JSON。")
+        except Exception as e:
+            logger.error(f"读取公告文件时发生错误: {e}")
+        finally:
+            try:
+                os.remove(announcement_file)
+                logger.info(f"公告文件 '{announcement_file}' 已被移除。")
+            except OSError as e:
+                logger.error(f"删除公告文件 '{announcement_file}' 失败: {e}")
+
 # --- 更新检查 ---
 GITHUB_REPO = "Lianues/LMArenaBridge"
 
@@ -342,6 +371,9 @@ async def lifespan(app: FastAPI):
     load_model_map() # 重新启用模型加载
     load_model_endpoint_map() # 加载模型端点映射
     logger.info("服务器启动完成。等待油猴脚本连接...")
+
+    # 检查并显示公告，放在启动信息的最后，使其更显眼
+    check_and_display_announcement()
 
     # 在模型更新后，标记活动时间的起点
     last_activity_time = datetime.now()
