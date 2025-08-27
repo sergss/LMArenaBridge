@@ -94,7 +94,7 @@
         }
 
         // URL 对于聊天和文生图是相同的
-        const apiUrl = `/api/stream/retry-evaluation-session-message/${session_id}/messages/${message_id}`;
+        const apiUrl = `/nextjs-api/stream/retry-evaluation-session-message/${session_id}/messages/${message_id}`;
         const httpMethod = 'PUT';
         
         console.log(`[API Bridge] 使用 API 端点: ${apiUrl}`);
@@ -217,7 +217,7 @@
 
         // 仅在 URL 是有效字符串时才进行匹配
         if (urlString) {
-            const match = urlString.match(/\/api\/stream\/retry-evaluation-session-message\/([a-f0-9-]+)\/messages\/([a-f0-9-]+)/);
+            const match = urlString.match(/\/nextjs-api\/stream\/retry-evaluation-session-message\/([a-f0-9-]+)\/messages\/([a-f0-9-]+)/);
 
             // 仅在请求不是由API桥自身发起，且捕获模式已激活时，才更新ID
             if (match && !window.isApiBridgeRequest && isCaptureModeActive) {
