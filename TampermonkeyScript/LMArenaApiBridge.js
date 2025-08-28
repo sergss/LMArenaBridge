@@ -169,7 +169,8 @@
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) {
-                    console.log(`[API Bridge] ✅ 请求 ${requestId.substring(0, 8)} 的流已结束。`);
+                    console.log(`[API Bridge] ✅ 请求 ${requestId.substring(0, 8)} 的流已成功结束。`);
+                    // 仅在流成功结束后发送 [DONE]
                     sendToServer(requestId, "[DONE]");
                     break;
                 }
@@ -180,8 +181,8 @@
 
         } catch (error) {
             console.error(`[API Bridge] ❌ 在为请求 ${requestId.substring(0, 8)} 执行 fetch 时出错:`, error);
+            // 发生错误时，只发送错误信息，不再发送 [DONE]
             sendToServer(requestId, { error: error.message });
-            sendToServer(requestId, "[DONE]");
         } finally {
             // 请求结束后，无论成功与否，都重置标志
             window.isApiBridgeRequest = false;

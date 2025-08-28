@@ -697,10 +697,9 @@ async def _process_lmarena_stream(request_id: str):
 
             # 2. 检查 [DONE] 信号
             if raw_data == "[DONE]":
-                # 如果产出了有效内容，说明这次请求是成功的
+                # 状态重置逻辑已移至 websocket_endpoint，以确保连接恢复时状态一定被重置
                 if has_yielded_content and IS_REFRESHING_FOR_VERIFICATION:
-                    logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 请求成功完成，重置人机验证状态。")
-                    IS_REFRESHING_FOR_VERIFICATION = False
+                     logger.info(f"PROCESSOR [ID: {request_id[:8]}]: 请求成功，人机验证状态将在下次连接时重置。")
                 break
 
             # 3. 累加缓冲区并检查内容
@@ -822,10 +821,16 @@ async def non_stream_response(request_id: str, model: str):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """处理来自油猴脚本的 WebSocket 连接。"""
-    global browser_ws
+    global browser_ws, IS_REFRESHING_FOR_VERIFICATION
     await websocket.accept()
     if browser_ws is not None:
         logger.warning("检测到新的油猴脚本连接，旧的连接将被替换。")
+    
+    # 只要有新的连接建立，就意味着人机验证流程已结束（或从未开始）
+    if IS_REFRESHING_FOR_VERIFICATION:
+        logger.info("✅ 新的 WebSocket 连接已建立，人机验证状态已自动重置。")
+        IS_REFRESHING_FOR_VERIFICATION = False
+        
     logger.info("✅ 油猴脚本已成功连接 WebSocket。")
     browser_ws = websocket
     try:
@@ -976,8 +981,18 @@ async def chat_completions(request: Request):
                 detail="提供的 API Key 不正确。"
             )
 
+    # --- 增强的连接检查，解决人机验证后的竞态条件 ---
+    if IS_REFRESHING_FOR_VERIFICATION and not browser_ws:
+        raise HTTPException(
+            status_code=503,
+            detail="正在等待浏览器刷新以完成人机验证，请在几秒钟后重试。"
+        )
+
     if not browser_ws:
-        raise HTTPException(status_code=503, detail="油猴脚本客户端未连接。请确保 LMArena 页面已打开并激活脚本。")
+        raise HTTPException(
+            status_code=503,
+            detail="油猴脚本客户端未连接。请确保 LMArena 页面已打开并激活脚本。"
+        )
 
     # --- 模型与会话ID映射逻辑 ---
     session_id, message_id = None, None
