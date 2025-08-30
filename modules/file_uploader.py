@@ -6,6 +6,8 @@ logger = logging.getLogger(__name__)
 
 from typing import Tuple
 
+from typing import Tuple
+
 async def upload_to_file_bed(file_name: str, file_data: str, upload_url: str, api_key: str | None = None) -> Tuple[str | None, str | None]:
     """
     将 base64 编码的文件上传到文件床服务器。
@@ -14,8 +16,8 @@ async def upload_to_file_bed(file_name: str, file_data: str, upload_url: str, ap
     :param file_data: Base64 data URI (例如, "data:image/png;base64,...").
     :param upload_url: 文件床的 /upload 端点 URL。
     :param api_key: (可选) 用于认证的 API Key。
-    :return: 一个元组 (file_url, error_message)。成功时 file_url 是字符串，error_message 是 None；
-             失败时 file_url 是 None，error_message 是包含错误信息的字符串。
+    :return: 一个元组 (filename, error_message)。成功时 filename 是字符串，error_message 是 None；
+             失败时 filename 是 None，error_message 是包含错误信息的字符串。
     """
     payload = {
         "file_name": file_name,
@@ -30,9 +32,9 @@ async def upload_to_file_bed(file_name: str, file_data: str, upload_url: str, ap
             response.raise_for_status()  # 如果状态码是 4xx 或 5xx，则引发异常
             
             result = response.json()
-            if result.get("success") and result.get("file_url"):
-                logger.info(f"文件 '{file_name}' 成功上传到文件床，URL: {result['file_url']}")
-                return result["file_url"], None
+            if result.get("success") and result.get("filename"):
+                logger.info(f"文件 '{file_name}' 成功上传到文件床，文件名为: {result['filename']}")
+                return result["filename"], None
             else:
                 error_msg = result.get("error", "文件床返回了未知的错误。")
                 logger.error(f"上传到文件床失败: {error_msg}")

@@ -1095,14 +1095,17 @@ async def chat_completions(request: Request):
                         file_name = original_filename or f"image_{uuid.uuid4()}.png"
                         
                         logger.info(f"文件床预处理：正在上传 '{file_name}'...")
-                        uploaded_url, error_message = await upload_to_file_bed(file_name, base64_url, upload_url, api_key)
+                        uploaded_filename, error_message = await upload_to_file_bed(file_name, base64_url, upload_url, api_key)
 
                         if error_message:
                             raise IOError(f"文件床上传失败: {error_message}")
                         
-                        # 关键修复：这里应该是替换 base64 url，而不是整个 part
-                        part["image_url"]["url"] = uploaded_url
-                        logger.info(f"附件URL已成功替换为: {uploaded_url}")
+                        # 根据您的建议，使用 config 中的 URL 前缀构建最终 URL
+                        url_prefix = upload_url.rsplit('/', 1)[0]
+                        final_url = f"{url_prefix}/uploads/{uploaded_filename}"
+                        
+                        part["image_url"]["url"] = final_url
+                        logger.info(f"附件URL已成功替换为: {final_url}")
 
         # 1. 转换请求 (此时已不包含需要上传的附件)
         lmarena_payload = await convert_openai_to_lmarena_payload(

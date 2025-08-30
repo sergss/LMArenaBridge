@@ -119,15 +119,12 @@ async def upload_file(request: UploadRequest, http_request: Request):
         with open(file_path, "wb") as f:
             f.write(file_data)
         
-        # 5. 构建可访问的 URL
-        #    - http_request.base_url 提供了服务器的基础 URL (例如 http://127.0.0.1:8000/)
-        file_url = f"{str(http_request.base_url).rstrip('/')}/uploads/{unique_filename}"
-        
+        # 5. 返回成功信息和唯一文件名
         logger.info(f"文件 '{request.file_name}' 已成功保存为 '{unique_filename}'。")
         
         return JSONResponse(
             status_code=200,
-            content={"success": True, "file_url": file_url}
+            content={"success": True, "filename": unique_filename}
         )
 
     except (ValueError, IndexError) as e:
