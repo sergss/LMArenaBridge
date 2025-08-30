@@ -56,7 +56,7 @@
 3.  **修改主配置**
     打开 `config.jsonc` 文件，进行如下设置：
     *   `"file_bed_enabled": true,`  // 启用文件床
-    *   `"file_bed_upload_url": "http://127.0.0.1:5104/upload",` // 确保地址正确
+    *   `"file_bed_upload_url": "http:\/\/127.0.0.1:5180/upload",` // 确保地址和端口正确。注意：为了确保最大兼容性，建议将URL中的 `//` 转义为 `\/\/`。
     *   `"file_bed_api_key": "your_secret_api_key"` // (可选) 如果你在 `file_bed_server/main.py` 中修改了 `API_KEY`，请在此处同步。
 
 4.  **正常运行主服务**

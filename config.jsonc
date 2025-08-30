@@ -1,7 +1,7 @@
 {
   // 版本号
   // 用于程序更新检查，请不要手动修改。
-  "version": "2.7.3",
+  "version": "2.7.4",
 
   // --- 会话设置 ---
   // 当前 LMArena 页面的会话 ID。
@@ -41,7 +41,8 @@
 
   // 文件床上传API的URL
   // 这是您 file_bed_server/main.py 服务的 /upload 端点地址。
-  "file_bed_upload_url": "http://127.0.0.1:5180/upload",
+  // 注意: 为了兼容可能存在的旧版解析器，建议将 // 转义为 \/\/
+  "file_bed_upload_url": "http:\/\/127.0.0.1:5180/upload",
 
   // 文件床 API Key
   // 如果您在 file_bed_server/main.py 中设置了 API_KEY，请在此处填写。

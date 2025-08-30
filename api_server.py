@@ -1086,6 +1086,9 @@ async def chat_completions(request: Request):
                         upload_url = CONFIG.get("file_bed_upload_url")
                         if not upload_url:
                             raise ValueError("文件床已启用，但 'file_bed_upload_url' 未配置。")
+                        
+                        # 确保处理转义的斜杠
+                        upload_url = upload_url.replace('\\/', '/')
 
                         api_key = CONFIG.get("file_bed_api_key")
                         file_name = original_filename or f"image_{uuid.uuid4()}.png"
