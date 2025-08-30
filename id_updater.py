@@ -24,10 +24,36 @@ def read_config():
         return None
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            # 正则表达式移除行注释和块注释
-            content = re.sub(r'//.*', '', f.read())
-            content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-            return json.loads(content)
+            lines = f.readlines()
+        
+        # 更稳健地移除注释，逐行处理以避免错误删除URL中的 "//"
+        no_comments_lines = []
+        in_block_comment = False
+        for line in lines:
+            stripped_line = line.strip()
+            if in_block_comment:
+                if '*/' in stripped_line:
+                    in_block_comment = False
+                    line = stripped_line.split('*/', 1)[1]
+                else:
+                    continue
+            
+            if '/*' in line and not in_block_comment:
+                before_comment, _, after_comment = line.partition('/*')
+                if '*/' in after_comment:
+                    _, _, after_block = after_comment.partition('*/')
+                    line = before_comment + after_block
+                else:
+                    line = before_comment
+                    in_block_comment = True
+
+            if line.strip().startswith('//'):
+                continue
+            
+            no_comments_lines.append(line)
+
+        json_content = "".join(no_comments_lines)
+        return json.loads(json_content)
     except Exception as e:
         print(f"❌ 读取或解析 '{CONFIG_PATH}' 时发生错误: {e}")
         return None
