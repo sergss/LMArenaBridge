@@ -7,14 +7,44 @@ import sys
 import json
 import re
 
+def _parse_jsonc(jsonc_string: str) -> dict:
+    """
+    稳健地解析 JSONC 字符串，移除注释。
+    """
+    lines = jsonc_string.splitlines()
+    no_comments_lines = []
+    in_block_comment = False
+    for line in lines:
+        stripped_line = line.strip()
+        if in_block_comment:
+            if '*/' in stripped_line:
+                in_block_comment = False
+                line = stripped_line.split('*/', 1)[1]
+            else:
+                continue
+        
+        if '/*' in line and not in_block_comment:
+            before_comment, _, after_comment = line.partition('/*')
+            if '*/' in after_comment:
+                _, _, after_block = after_comment.partition('*/')
+                line = before_comment + after_block
+            else:
+                line = before_comment
+                in_block_comment = True
+
+        if line.strip().startswith('//'):
+            continue
+        
+        no_comments_lines.append(line)
+
+    return json.loads("\n".join(no_comments_lines))
+
 def load_jsonc_values(path):
     """从一个 .jsonc 文件中加载数据，忽略注释，只返回键值对。"""
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-        content = re.sub(r'//.*', '', content)
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-        return json.loads(content)
+        return _parse_jsonc(content)
     except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
         print(f"加载或解析 {path} 的值时出错: {e}")
         return None

@@ -72,47 +72,45 @@ def load_model_endpoint_map():
         logger.error(f"加载或解析 'model_endpoint_map.json' 失败: {e}。将使用空映射。")
         MODEL_ENDPOINT_MAP = {}
 
+def _parse_jsonc(jsonc_string: str) -> dict:
+    """
+    稳健地解析 JSONC 字符串，移除注释。
+    """
+    lines = jsonc_string.splitlines()
+    no_comments_lines = []
+    in_block_comment = False
+    for line in lines:
+        stripped_line = line.strip()
+        if in_block_comment:
+            if '*/' in stripped_line:
+                in_block_comment = False
+                line = stripped_line.split('*/', 1)[1]
+            else:
+                continue
+        
+        if '/*' in line and not in_block_comment:
+            before_comment, _, after_comment = line.partition('/*')
+            if '*/' in after_comment:
+                _, _, after_block = after_comment.partition('*/')
+                line = before_comment + after_block
+            else:
+                line = before_comment
+                in_block_comment = True
+
+        if line.strip().startswith('//'):
+            continue
+        
+        no_comments_lines.append(line)
+
+    return json.loads("\n".join(no_comments_lines))
+
 def load_config():
     """从 config.jsonc 加载配置，并处理 JSONC 注释。"""
     global CONFIG
     try:
         with open('config.jsonc', 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        # 更稳健地移除注释，逐行处理以避免错误删除URL中的 "//"
-        no_comments_lines = []
-        in_block_comment = False
-        for line in lines:
-            stripped_line = line.strip()
-            if in_block_comment:
-                if '*/' in stripped_line:
-                    in_block_comment = False
-                    # 处理块注释结束后的剩余部分
-                    line = stripped_line.split('*/', 1)[1]
-                else:
-                    continue # 在块注释中，跳过此行
-            
-            if '/*' in line and not in_block_comment:
-                 # 简单处理单行内的块注释，或块注释的开始
-                before_comment, _, after_comment = line.partition('/*')
-                if '*/' in after_comment:
-                     # 单行块注释
-                    _, _, after_block = after_comment.partition('*/')
-                    line = before_comment + after_block
-                else:
-                    # 多行块注释的开始
-                    line = before_comment
-                    in_block_comment = True
-
-            # 只移除那些以 // 开头的行注释（允许前面有空格）
-            if line.strip().startswith('//'):
-                continue
-            
-            no_comments_lines.append(line)
-
-        json_content = "".join(no_comments_lines)
-        CONFIG = json.loads(json_content)
-
+            content = f.read()
+        CONFIG = _parse_jsonc(content)
         logger.info("成功从 'config.jsonc' 加载配置。")
         # 打印关键配置状态
         logger.info(f"  - 酒馆模式 (Tavern Mode): {'✅ 启用' if CONFIG.get('tavern_mode_enabled') else '❌ 禁用'}")
@@ -222,9 +220,7 @@ def check_for_updates():
         response.raise_for_status()
 
         jsonc_content = response.text
-        json_content = re.sub(r'//.*', '', jsonc_content)
-        json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
-        remote_config = json.loads(json_content)
+        remote_config = _parse_jsonc(jsonc_content)
         
         remote_version_str = remote_config.get("version")
         if not remote_version_str:
