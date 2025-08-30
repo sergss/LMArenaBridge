@@ -21,6 +21,46 @@
 *   **🤫 Bypass 模式**: 尝试通过在请求中额外注入一个空的用户消息，绕过平台的敏感词审查。
 *   **🔐 API Key 保护**: 可在配置文件中设置 API Key，为你的服务增加一层安全保障。
 *   **🎯 模型-会话高级映射**: 支持为不同模型配置独立的会话ID池，并能为每个会话指定特定的工作模式（如 `battle` 或 `direct_chat`），实现更精细的请求控制。
+*   **🖼️ 可选的外部文件床**: 新增一个独立的 FastAPI 文件床服务器。启用后，所有附件会先上传到此服务器并转换为直接 URL，从而绕过 LMArena 对 Base64 大小和类型的限制，让你能上传更大的文件或视频等。
+
+## 📂 新增：文件床服务器
+
+为了解决 LMArena 对 Base64 附件大小（通常约5MB）的限制，并支持更多文件类型，本项目现在包含一个独立的文件床服务器。
+
+### 工作原理
+
+1.  当你在 `config.jsonc` 中启用 `file_bed_enabled` 时。
+2.  `api_server.py` 在处理你的请求时，会截获所有 `data:` URI 格式的附件。
+3.  它会调用文件床服务器的 `/upload` API，将文件上传。
+4.  文件床服务器将文件保存在本地 `file_bed_server/uploads/` 目录中，并返回一个可公开访问的 URL (例如 `http://127.0.0.1:5104/uploads/xxxx.png`)。
+5.  `api_server.py` 随后将这个 URL 作为纯文本插入到你的消息内容中，而不是作为附件发送。
+6.  这样，即使是 LMArena 不直接支持的视频、大型图片或压缩包，也能以链接的形式发送给模型。
+
+### 如何使用
+
+1.  **安装依赖**
+    进入 `file_bed_server` 目录并安装其特定依赖：
+    ```bash
+    cd file_bed_server
+    pip install -r requirements.txt
+    cd ..
+    ```
+
+2.  **启动文件床服务器**
+    在**一个新的终端**中，运行文件床服务器：
+    ```bash
+    python file_bed_server/main.py
+    ```
+    服务器默认运行在 `http://127.0.0.1:5104`。
+
+3.  **修改主配置**
+    打开 `config.jsonc` 文件，进行如下设置：
+    *   `"file_bed_enabled": true,`  // 启用文件床
+    *   `"file_bed_upload_url": "http://127.0.0.1:5104/upload",` // 确保地址正确
+    *   `"file_bed_api_key": "your_secret_api_key"` // (可选) 如果你在 `file_bed_server/main.py` 中修改了 `API_KEY`，请在此处同步。
+
+4.  **正常运行主服务**
+    像往常一样启动 `api_server.py`。现在，当你通过客户端发送带有多媒体附件的请求时，它们将自动通过文件床进行处理。
 
 ## ⚙️ 配置文件说明
 
@@ -313,7 +353,13 @@ sequenceDiagram
 ├── README.md                   # 就是你现在正在看的这个文件 👋
 ├── config.jsonc                # 全局功能配置文件 ⚙️
 ├── modules/
-│   └── update_script.py        # 自动更新逻辑脚本 🔄
+│   ├── update_script.py        # 自动更新逻辑脚本 🔄
+│   └── file_uploader.py        # 文件床上传客户端模块 🖼️
+├── file_bed_server/              # [新增] 独立的文件床服务器 📂
+│   ├── main.py                 # 文件床 FastAPI 应用
+│   ├── requirements.txt        # 文件床服务的依赖
+│   ├── .gitignore              # 忽略上传的文件
+│   └── uploads/                # (自动创建) 存储上传文件的目录
 └── TampermonkeyScript/
     └── LMArenaApiBridge.js     # 前端自动化油猴脚本 🐵
 ```

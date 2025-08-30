@@ -127,7 +127,7 @@
                 evaluationId: null,
                 evaluationSessionId: session_id,
                 parentMessageIds: parentIds,
-                experimental_attachments: template.attachments || [],
+                experimental_attachments: Array.isArray(template.attachments) ? template.attachments : [],
                 failureReason: null,
                 metadata: null,
                 participantPosition: template.participantPosition || "a",

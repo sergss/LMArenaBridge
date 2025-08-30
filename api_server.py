@@ -23,6 +23,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 
+# --- 内部模块导入 ---
+from modules.file_uploader import upload_to_file_bed
+
 
 # --- 基础配置 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,11 +77,42 @@ def load_config():
     global CONFIG
     try:
         with open('config.jsonc', 'r', encoding='utf-8') as f:
-            content = f.read()
-            # 移除 // 行注释和 /* */ 块注释
-            json_content = re.sub(r'//.*', '', content)
-            json_content = re.sub(r'/\*.*?\*/', '', json_content, flags=re.DOTALL)
-            CONFIG = json.loads(json_content)
+            lines = f.readlines()
+        
+        # 更稳健地移除注释，逐行处理以避免错误删除URL中的 "//"
+        no_comments_lines = []
+        in_block_comment = False
+        for line in lines:
+            stripped_line = line.strip()
+            if in_block_comment:
+                if '*/' in stripped_line:
+                    in_block_comment = False
+                    # 处理块注释结束后的剩余部分
+                    line = stripped_line.split('*/', 1)[1]
+                else:
+                    continue # 在块注释中，跳过此行
+            
+            if '/*' in line and not in_block_comment:
+                 # 简单处理单行内的块注释，或块注释的开始
+                before_comment, _, after_comment = line.partition('/*')
+                if '*/' in after_comment:
+                     # 单行块注释
+                    _, _, after_block = after_comment.partition('*/')
+                    line = before_comment + after_block
+                else:
+                    # 多行块注释的开始
+                    line = before_comment
+                    in_block_comment = True
+
+            # 只移除那些以 // 开头的行注释（允许前面有空格）
+            if line.strip().startswith('//'):
+                continue
+            
+            no_comments_lines.append(line)
+
+        json_content = "".join(no_comments_lines)
+        CONFIG = json.loads(json_content)
+
         logger.info("成功从 'config.jsonc' 加载配置。")
         # 打印关键配置状态
         logger.info(f"  - 酒馆模式 (Tavern Mode): {'✅ 启用' if CONFIG.get('tavern_mode_enabled') else '❌ 禁用'}")
@@ -429,12 +463,12 @@ def save_config():
         logger.error(f"❌ 写入 config.jsonc 时发生错误: {e}", exc_info=True)
 
 
-def _process_openai_message(message: dict) -> dict:
+async def _process_openai_message(message: dict) -> dict:
     """
     处理OpenAI消息，分离文本和附件。
     - 将多模态内容列表分解为纯文本和附件列表。
+    - 文件床逻辑已移至 chat_completions 预处理，此处仅处理常规附件构建。
     - 确保 user 角色的空内容被替换为空格，以避免 LMArena 出错。
-    - 为附件生成基础结构。
     """
     content = message.get("content")
     role = message.get("role")
@@ -442,57 +476,39 @@ def _process_openai_message(message: dict) -> dict:
     text_content = ""
 
     if isinstance(content, list):
-        
         text_parts = []
         for part in content:
             if part.get("type") == "text":
                 text_parts.append(part.get("text", ""))
             elif part.get("type") == "image_url":
+                # 此处的 URL 可能是 base64 或 http URL (已被预处理器替换)
                 image_url_data = part.get("image_url", {})
                 url = image_url_data.get("url")
-
-                # 新增逻辑：允许客户端通过 detail 字段传递原始文件名
-                # detail 字段是 OpenAI Vision API 的一部分，这里我们复用它
                 original_filename = image_url_data.get("detail")
 
-                if url and url.startswith("data:"):
-                    try:
+                try:
+                    # 对于 base64，我们需要提取 content_type
+                    if url.startswith("data:"):
                         content_type = url.split(';')[0].split(':')[1]
-                        
-                        # 如果客户端提供了原始文件名，直接使用它
-                        if original_filename and isinstance(original_filename, str):
-                            file_name = original_filename
-                            logger.info(f"成功处理一个附件 (使用原始文件名): {file_name}")
-                        else:
-                            # 否则，回退到旧的、基于UUID的命名逻辑
-                            main_type, sub_type = content_type.split('/') if '/' in content_type else ('application', 'octet-stream')
-                            
-                            if main_type == "image": prefix = "image"
-                            elif main_type == "audio": prefix = "audio"
-                            else: prefix = "file"
-                            
-                            guessed_extension = mimetypes.guess_extension(content_type)
-                            if guessed_extension:
-                                file_extension = guessed_extension.lstrip('.')
-                            else:
-                                file_extension = sub_type if len(sub_type) < 20 else 'bin'
-                            
-                            file_name = f"{prefix}_{uuid.uuid4()}.{file_extension}"
-                            logger.info(f"成功处理一个附件 (生成文件名): {file_name}")
+                    else:
+                        # 对于 http URL，我们尝试猜测 content_type
+                        content_type = mimetypes.guess_type(url)[0] or 'application/octet-stream'
 
-                        attachments.append({
-                            "name": file_name,
-                            "contentType": content_type,
-                            "url": url
-                        })
-                    except (IndexError, ValueError) as e:
-                        logger.warning(f"无法解析的 base64 data URI: {url[:60]}... 错误: {e}")
+                    file_name = original_filename or f"image_{uuid.uuid4()}.{mimetypes.guess_extension(content_type).lstrip('.') or 'png'}"
+                    
+                    attachments.append({
+                        "name": file_name,
+                        "contentType": content_type,
+                        "url": url
+                    })
+
+                except (AttributeError, IndexError, ValueError) as e:
+                    logger.warning(f"处理附件URL时出错: {url[:100]}... 错误: {e}")
 
         text_content = "\n\n".join(text_parts)
     elif isinstance(content, str):
         text_content = content
 
-    
     if role == "user" and not text_content.strip():
         text_content = " "
 
@@ -502,7 +518,7 @@ def _process_openai_message(message: dict) -> dict:
         "attachments": attachments
     }
 
-def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, message_id: str, mode_override: str = None, battle_target_override: str = None) -> dict:
+async def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, message_id: str, mode_override: str = None, battle_target_override: str = None) -> dict:
     """
     将 OpenAI 请求体转换为油猴脚本所需的简化载荷，并应用酒馆模式、绕过模式以及对战模式。
     新增了模式覆盖参数，以支持模型特定的会话模式。
@@ -516,7 +532,10 @@ def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, messag
             msg["role"] = "system"
             logger.info("消息角色规范化：将 'developer' 转换为 'system'。")
             
-    processed_messages = [_process_openai_message(msg.copy()) for msg in messages]
+    processed_messages = []
+    for msg in messages:
+        processed_msg = await _process_openai_message(msg.copy())
+        processed_messages.append(processed_msg)
 
     # 2. 应用酒馆模式 (Tavern Mode)
     if CONFIG.get("tavern_mode_enabled"):
@@ -1053,8 +1072,40 @@ async def chat_completions(request: Request):
     logger.info(f"API CALL [ID: {request_id[:8]}]: 已创建响应通道。")
 
     try:
-        # 1. 转换请求，传入可能存在的模式覆盖信息
-        lmarena_payload = convert_openai_to_lmarena_payload(
+        # --- 附件预处理（包括文件床上传） ---
+        # 在与浏览器通信前，先处理好所有附件。如果失败，则立即返回错误。
+        messages_to_process = openai_req.get("messages", [])
+        for message in messages_to_process:
+            content = message.get("content")
+            if isinstance(content, list):
+                for i, part in enumerate(content):
+                    if part.get("type") == "image_url" and CONFIG.get("file_bed_enabled"):
+                        image_url_data = part.get("image_url", {})
+                        base64_url = image_url_data.get("url")
+                        original_filename = image_url_data.get("detail")
+                        
+                        if not (base64_url and base64_url.startswith("data:")):
+                            raise ValueError(f"无效的图片数据格式: {base64_url[:100] if base64_url else 'None'}")
+
+                        upload_url = CONFIG.get("file_bed_upload_url")
+                        if not upload_url:
+                            raise ValueError("文件床已启用，但 'file_bed_upload_url' 未配置。")
+
+                        api_key = CONFIG.get("file_bed_api_key")
+                        file_name = original_filename or f"image_{uuid.uuid4()}.png"
+                        
+                        logger.info(f"文件床预处理：正在上传 '{file_name}'...")
+                        uploaded_url, error_message = await upload_to_file_bed(file_name, base64_url, upload_url, api_key)
+
+                        if error_message:
+                            raise IOError(f"文件床上传失败: {error_message}")
+                        
+                        # 关键修复：这里应该是替换 base64 url，而不是整个 part
+                        part["image_url"]["url"] = uploaded_url
+                        logger.info(f"附件URL已成功替换为: {uploaded_url}")
+
+        # 1. 转换请求 (此时已不包含需要上传的附件)
+        lmarena_payload = await convert_openai_to_lmarena_payload(
             openai_req,
             session_id,
             message_id,
@@ -1084,12 +1135,26 @@ async def chat_completions(request: Request):
         else:
             # 返回非流式响应
             return await non_stream_response(request_id, model_name or "default_model")
+    except (ValueError, IOError) as e:
+        # 捕获附件处理错误
+        logger.error(f"API CALL [ID: {request_id[:8]}]: 附件预处理失败: {e}")
+        if request_id in response_channels:
+            del response_channels[request_id]
+        # 返回一个格式正确的JSON错误响应
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": f"[LMArena Bridge Error] 附件处理失败: {e}", "type": "attachment_error"}}
+        )
     except Exception as e:
-        # 如果在设置过程中出错，清理通道
+        # 捕获所有其他错误
         if request_id in response_channels:
             del response_channels[request_id]
         logger.error(f"API CALL [ID: {request_id[:8]}]: 处理请求时发生致命错误: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # 确保也返回格式正确的JSON
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(e), "type": "internal_server_error"}}
+        )
 
 # --- 内部通信端点 ---
 @app.post("/internal/start_id_capture")
