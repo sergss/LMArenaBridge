@@ -23,10 +23,5 @@
       "message_id": "message_for_battle_A",
       "mode": "battle",
       "battle_target": "A"
-    },
-  "nano-banana": {
-      "session_id": "4261456c-7c1d-4f09-932a-7400d2974ff4",
-      "message_id": "5b2271af-85ca-4dd7-8554-36b5b091642f",
-      "mode": "direct_chat"
     }
 }

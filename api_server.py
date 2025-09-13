@@ -1115,6 +1115,10 @@ async def chat_completions(request: Request):
             battle_target_override=battle_target_override
         )
         
+        # 关键补充：如果模型是图片类型，则向油猴脚本明确指出
+        if model_type == 'image':
+            lmarena_payload['is_image_request'] = True
+        
         # 2. 包装成发送给浏览器的消息
         message_to_browser = {
             "request_id": request_id,
