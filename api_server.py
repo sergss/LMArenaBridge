@@ -569,6 +569,45 @@ async def convert_openai_to_lmarena_payload(openai_data: dict, session_id: str, 
             "content": msg.get("content", ""),
             "attachments": msg.get("attachments", [])
         })
+    
+    # 4.5. 特殊处理：如果用户消息结尾包含--bypass且包含图片，构造虚假助手消息
+    if message_templates and message_templates[-1]["role"] == "user":
+        last_msg = message_templates[-1]
+        if last_msg["content"].strip().endswith("--bypass") and last_msg.get("attachments"):
+            has_images = False
+            for attachment in last_msg.get("attachments", []):
+                if attachment.get("contentType", "").startswith("image/"):
+                    has_images = True
+                    break
+            
+            if has_images:
+                logger.info("检测到--bypass标记和图片附件，构造虚假助手消息")
+                
+                # 移除用户消息中的--bypass标记
+                last_msg["content"] = last_msg["content"].strip()[:-9].strip()
+                
+                # 构造一个虚假助手消息，使用用户消息中的图片附件
+                fake_assistant_msg = {
+                    "role": "assistant",
+                    "content": "",  # 空内容
+                    "attachments": last_msg.get("attachments", []).copy()  # 复制用户的图片附件
+                }
+                
+                # 清空原用户消息的附件列表
+                last_msg["attachments"] = []
+                
+                # 将虚假助手消息插入到用户消息前
+                message_templates.insert(len(message_templates)-1, fake_assistant_msg)
+                
+                # 检查是否需要在第一位添加虚假用户消息
+                if message_templates[0]["role"] == "assistant":
+                    logger.info("检测到第一条消息是助手消息，添加虚假用户消息...")
+                    fake_user_msg = {
+                        "role": "user",
+                        "content": "Hi",
+                        "attachments": []
+                    }
+                    message_templates.insert(0, fake_user_msg)
 
     # 5. 应用绕过模式 (Bypass Mode) - 仅对文本模型生效
     model_type = model_info.get("type", "text")
