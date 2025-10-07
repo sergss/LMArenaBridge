@@ -3,33 +3,33 @@ import requests
 import time
 import logging
 
-# --- 配置 ---
+# --- Конфигурация ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-API_SERVER_URL = "http://127.0.0.1:5102" # 与 api_server.py 中的端口匹配
+API_SERVER_URL = "http://127.0.0.1:5102" # Соответствует порту, указанному в api_server.py
 
 def trigger_model_update():
     """
-    通知主服务器开始模型列表更新流程。
+    Уведомляет главный сервер о начале процесса обновления списка моделей.
     """
     try:
-        logging.info("正在向主服务器发送模型列表更新请求...")
+        logging.info("Отправка запроса на обновление списка моделей на главный сервер...")
         response = requests.post(f"{API_SERVER_URL}/internal/request_model_update")
         response.raise_for_status()
         
         if response.json().get("status") == "success":
-            logging.info("✅ 已成功请求服务器更新模型列表。")
-            logging.info("请确保 LMArena 页面已打开，脚本将自动从页面提取最新模型列表。")
-            logging.info("服务器将把结果保存在 `available_models.json` 文件中。")
+            logging.info("✅ Запрос на обновление списка моделей успешно отправлен на сервер.")
+            logging.info("Убедитесь, что страница LMArena открыта, скрипт автоматически извлечёт актуальный список моделей со страницы.")
+            logging.info("Сервер сохранит результаты в файле `available_models.json`.")
         else:
-            logging.error(f"❌ 服务器返回错误: {response.json().get('message')}")
+            logging.error(f"❌ Сервер вернул ошибку: {response.json().get('message')}")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"❌ 无法连接到主服务器 ({API_SERVER_URL})。")
-        logging.error("请确保 `api_server.py` 正在运行中。")
+        logging.error(f"❌ Не удалось подключиться к главному серверу ({API_SERVER_URL}).")
+        logging.error("Убедитесь, что `api_server.py` запущен.")
     except Exception as e:
-        logging.error(f"发生未知错误: {e}")
+        logging.error(f"Произошла неизвестная ошибка: {e}")
 
 if __name__ == "__main__":
     trigger_model_update()
-    # 脚本执行完毕后自动退出
+    # Скрипт автоматически завершает работу после выполнения
     time.sleep(2)

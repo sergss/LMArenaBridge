@@ -12,25 +12,25 @@ from pydantic import BaseModel
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- 基础配置 ---
+# --- Базовая конфигурация ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- 路径配置 ---
-# 将上传目录定位到 main.py 文件的同级目录
+# --- Конфигурация путей ---
+# Указываем директорию для загрузки в той же папке, где находится main.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-API_KEY = "your_secret_api_key"  # 简单的认证密钥
-CLEANUP_INTERVAL_MINUTES = 1 # 清理任务运行频率（分钟）
-FILE_MAX_AGE_MINUTES = 10 # 文件最大保留时间（分钟）
+UPLOAD_DIR = os.path.join(BASE_DIR, "Uploads")
+API_KEY = "your_secret_api_key"  # Простой ключ для аутентификации
+CLEANUP_INTERVAL_MINUTES = 1 # Частота выполнения задачи очистки (в минутах)
+FILE_MAX_AGE_MINUTES = 10 # Максимальное время хранения файлов (в минутах)
 
-# --- 清理函数 ---
+# --- Функция очистки ---
 def cleanup_old_files():
-    """遍历上传目录并删除超过指定时间的文件。"""
+    """Просматривает директорию загрузок и удаляет файлы, старше указанного времени."""
     now = time.time()
     cutoff = now - (FILE_MAX_AGE_MINUTES * 60)
     
-    logger.info(f"正在运行清理任务，删除早于 {datetime.fromtimestamp(cutoff).strftime('%Y-%m-%d %H:%M:%S')} 的文件...")
+    logger.info(f"Выполняется задача очистки, удаление файлов, созданных ранее {datetime.fromtimestamp(cutoff).strftime('%Y-%m-%d %H:%M:%S')}...")
     
     deleted_count = 0
     try:
@@ -41,72 +41,70 @@ def cleanup_old_files():
                     file_mtime = os.path.getmtime(file_path)
                     if file_mtime < cutoff:
                         os.remove(file_path)
-                        logger.info(f"已删除过期文件: {filename}")
+                        logger.info(f"Удалён устаревший файл: {filename}")
                         deleted_count += 1
                 except OSError as e:
-                    logger.error(f"删除文件 '{file_path}' 时出错: {e}")
+                    logger.error(f"Ошибка при удалении файла '{file_path}': {e}")
     except Exception as e:
-        logger.error(f"清理旧文件时发生未知错误: {e}", exc_info=True)
+        logger.error(f"Произошла неизвестная ошибка при очистке старых файлов: {e}", exc_info=True)
 
     if deleted_count > 0:
-        logger.info(f"清理任务完成，共删除了 {deleted_count} 个文件。")
+        logger.info(f"Задача очистки завершена, удалено {deleted_count} файлов.")
     else:
-        logger.info("清理任务完成，没有找到需要删除的文件。")
+        logger.info("Задача очистки завершена, файлов для удаления не найдено.")
 
-
-# --- FastAPI 生命周期事件 ---
+# --- События жизненного цикла FastAPI ---
 scheduler = BackgroundScheduler(timezone="UTC")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """在服务器启动时启动后台任务，在关闭时停止。"""
-    # 启动调度器并添加任务
+    """Запускает фоновые задачи при старте сервера и останавливает их при завершении."""
+    # Запуск планировщика и добавление задачи
     scheduler.add_job(cleanup_old_files, 'interval', minutes=CLEANUP_INTERVAL_MINUTES)
     scheduler.start()
-    logger.info(f"后台文件清理任务已启动，每 {CLEANUP_INTERVAL_MINUTES} 分钟运行一次。")
+    logger.info(f"Фоновая задача очистки файлов запущена, выполняется каждые {CLEANUP_INTERVAL_MINUTES} минут.")
     yield
-    # 关闭调度器
+    # Остановка планировщика
     scheduler.shutdown()
-    logger.info("后台文件清理任务已停止。")
-
+    logger.info("Фоновая задача очистки файлов остановлена.")
 
 app = FastAPI(lifespan=lifespan)
 
-# --- 确保上传目录存在 ---
+# --- Проверка существования директории загрузок ---
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
-    logger.info(f"上传目录 '{UPLOAD_DIR}' 已创建。")
+    logger.info(f"Директория загрузок '{UPLOAD_DIR}' создана.")
 
-# --- 挂载静态文件目录以提供文件访问 ---
-app.mount(f"/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# --- Монтирование статической директории для доступа к файлам ---
+app.mount(f"/Uploads", StaticFiles(directory=UPLOAD_DIR), name="Uploads")
 
-# --- Pydantic 模型定义 ---
+# --- Определение модели Pydantic ---
 class UploadRequest(BaseModel):
     file_name: str
-    file_data: str # 接收完整的 base64 data URI
+    file_data: str # Принимает полный base64 data URI
     api_key: str | None = None
 
-# --- API 端点 ---
+# --- API-эндпоинты ---
 @app.post("/upload")
 async def upload_file(request: UploadRequest, http_request: Request):
     """
-    接收 base64 编码的文件并保存，返回可访问的 URL。
+    Принимает файл, закодированный в base64, сохраняет его и возвращает доступный URL.
     """
-    # 简单的 API Key 认证
+    # Простая аутентификация по API-ключу
     if API_KEY and request.api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="无效的 API Key")
+        raise HTTPException(status_code=401, detail="Недействительный API-ключ")
 
     try:
-        # 1. 解析 base64 data URI
+        # 1. Разбор base64 data URI
         header, encoded_data = request.file_data.split(',', 1)
         
-        # 2. 解码 base64 数据
+        # 2. Декодирование base64-данных
         file_data = base64.b64decode(encoded_data)
         
-        # 3. 生成唯一文件名以避免冲突
+        # 3. Генерация уникального имени файла для избежания конфликтов
         file_extension = os.path.splitext(request.file_name)[1]
         if not file_extension:
-            # 尝试从 header 中获取 mime 类型来猜测扩展名
+            # Попытка определить расширение по mime-типу из заголовка
             import mimetypes
             mime_type = header.split(';')[0].split(':')[1]
             guessed_extension = mimetypes.guess_extension(mime_type)
@@ -115,12 +113,12 @@ async def upload_file(request: UploadRequest, http_request: Request):
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-        # 4. 保存文件
+        # 4. Сохранение файла
         with open(file_path, "wb") as f:
             f.write(file_data)
         
-        # 5. 返回成功信息和唯一文件名
-        logger.info(f"文件 '{request.file_name}' 已成功保存为 '{unique_filename}'。")
+        # 5. Возврат успешного ответа с уникальным именем файла
+        logger.info(f"Файл '{request.file_name}' успешно сохранён как '{unique_filename}'.")
         
         return JSONResponse(
             status_code=200,
@@ -128,21 +126,21 @@ async def upload_file(request: UploadRequest, http_request: Request):
         )
 
     except (ValueError, IndexError) as e:
-        logger.error(f"解析 base64 数据时出错: {e}")
-        raise HTTPException(status_code=400, detail=f"无效的 base64 data URI 格式: {e}")
+        logger.error(f"Ошибка при разборе base64-данных: {e}")
+        raise HTTPException(status_code=400, detail=f"Недействительный формат base64 data URI: {e}")
     except Exception as e:
-        logger.error(f"处理文件上传时发生未知错误: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"内部服务器错误: {e}")
+        logger.error(f"Произошла неизвестная ошибка при обработке загрузки файла: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {e}")
 
 @app.get("/")
 def read_root():
-    return {"message": "LMArena Bridge 文件床服务器正在运行。"}
+    return {"message": "Сервер файлового хранилища LMArena Bridge работает."}
 
-# --- 主程序入口 ---
+# --- Точка входа программы ---
 if __name__ == "__main__":
     import uvicorn
-    logger.info("🚀 文件床服务器正在启动...")
-    logger.info("   - 监听地址: http://127.0.0.1:5180")
-    logger.info(f"   - 上传端点: http://127.0.0.1:5180/upload")
-    logger.info(f"   - 文件访问路径: /uploads")
+    logger.info("🚀 Сервер файлового хранилища запускается...")
+    logger.info("   - Адрес прослушивания: http://127.0.0.1:5180")
+    logger.info(f"   - Эндпоинт загрузки: http://127.0.0.1:5180/upload")
+    logger.info(f"   - Путь доступа к файлам: /Uploads")
     uvicorn.run(app, host="0.0.0.0", port=5180)

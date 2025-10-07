@@ -9,7 +9,7 @@ import re
 
 def _parse_jsonc(jsonc_string: str) -> dict:
     """
-    稳健地解析 JSONC 字符串，移除注释。
+    Надёжно парсит JSONC-строку, удаляя комментарии.
     """
     lines = jsonc_string.splitlines()
     no_comments_lines = []
@@ -40,24 +40,24 @@ def _parse_jsonc(jsonc_string: str) -> dict:
     return json.loads("\n".join(no_comments_lines))
 
 def load_jsonc_values(path):
-    """从一个 .jsonc 文件中加载数据，忽略注释，只返回键值对。"""
+    """Загружает данные из файла .jsonc, игнорируя комментарии, возвращает только пары ключ-значение."""
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
         return _parse_jsonc(content)
     except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
-        print(f"加载或解析 {path} 的值时出错: {e}")
+        print(f"Ошибка при загрузке или разборе значений из {path}: {e}")
         return None
 
 def get_all_relative_paths(directory):
-    """获取一个目录下所有文件和空文件夹的相对路径集合。"""
+    """Получает набор относительных путей всех файлов и пустых папок в директории."""
     paths = set()
     for root, dirs, files in os.walk(directory):
-        # 添加文件
+        # Добавление файлов
         for name in files:
             path = os.path.join(root, name)
             paths.add(os.path.relpath(path, directory))
-        # 添加空文件夹
+        # Добавление пустых папок
         for name in dirs:
             dir_path = os.path.join(root, name)
             if not os.listdir(dir_path):
@@ -65,13 +65,13 @@ def get_all_relative_paths(directory):
     return paths
 
 def main():
-    print("--- 更新脚本已启动 ---")
+    print("--- Скрипт обновления запущен ---")
     
-    # 1. 等待主程序退出
-    print("等待主程序关闭 (3秒)...")
+    # 1. Ожидание завершения работы основного приложения
+    print("Ожидание завершения работы основного приложения (3 секунды)...")
     time.sleep(3)
     
-    # 2. 定义路径
+    # 2. Определение путей
     destination_dir = os.getcwd()
     update_dir = "update_temp"
     source_dir_inner = os.path.join(update_dir, "LMArenaBridge-main")
@@ -80,34 +80,34 @@ def main():
     model_endpoint_map_filename = 'model_endpoint_map.json'
     
     if not os.path.exists(source_dir_inner):
-        print(f"错误：找不到源目录 {source_dir_inner}。更新失败。")
+        print(f"Ошибка: исходная директория {source_dir_inner} не найдена. Обновление не выполнено.")
         return
         
-    print(f"源目录: {os.path.abspath(source_dir_inner)}")
-    print(f"目标目录: {os.path.abspath(destination_dir)}")
+    print(f"Исходная директория: {os.path.abspath(source_dir_inner)}")
+    print(f"Целевая директория: {os.path.abspath(destination_dir)}")
 
-    # 3. 备份关键文件
-    print("正在备份当前配置和模型文件...")
+    # 3. Резервное копирование ключевых файлов
+    print("Создание резервной копии текущих файлов конфигурации и моделей...")
     old_config_path = os.path.join(destination_dir, config_filename)
     old_models_path = os.path.join(destination_dir, models_filename)
     old_config_values = load_jsonc_values(old_config_path)
     
-    # 4. 确定要保留的文件和文件夹
-    # 保留 update_temp 自身, .git 目录, 和任何用户可能添加的隐藏文件/文件夹
+    # 4. Определение файлов и папок, которые нужно сохранить
+    # Сохраняем update_temp, .git и любые скрытые файлы/папки, добавленные пользователем
     preserved_items = {update_dir, ".git", ".github"}
 
-    # 5. 获取新旧文件列表
+    # 5. Получение списков новых и текущих файлов
     new_files = get_all_relative_paths(source_dir_inner)
-    # 排除 .git 和 .github 目录，因为它们不应该被部署
+    # Исключаем директории .git и .github, так как они не должны быть развернуты
     new_files = {f for f in new_files if not (f.startswith('.git') or f.startswith('.github'))}
 
     current_files = get_all_relative_paths(destination_dir)
 
-    print("\n--- 文件变更分析 ---")
-    print("[*] 文件删除功能已禁用，以保护用户数据。仅执行文件复制和配置更新。")
+    print("\n--- Анализ изменений файлов ---")
+    print("[*] Функция удаления файлов отключена для защиты пользовательских данных. Выполняется только копирование файлов и обновление конфигурации.")
 
-    # 7. 复制新文件（除配置文件外）
-    print("\n[+] 正在复制新文件...")
+    # 7. Копирование новых файлов (кроме конфигурационных)
+    print("\n[+] Копирование новых файлов...")
     try:
         new_config_template_path = os.path.join(source_dir_inner, config_filename)
         
@@ -115,32 +115,32 @@ def main():
             s = os.path.join(source_dir_inner, item)
             d = os.path.join(destination_dir, item)
             
-            # 跳过 .git 和 .github 目录
+            # Пропускаем директории .git и .github
             if item in {".git", ".github"}:
                 continue
             
             if os.path.basename(s) == config_filename:
-                continue # 跳过主配置文件，稍后处理
+                continue # Пропускаем основной файл конфигурации, он обрабатывается позже
             
             if os.path.basename(s) == model_endpoint_map_filename:
-                continue # 跳过模型端点映射文件，保留用户本地版本
+                continue # Пропускаем файл сопоставления конечных точек моделей, сохраняем пользовательскую версию
 
             if os.path.basename(s) == models_filename:
-                continue # 跳过 models.json 文件，保留用户本地版本
+                continue # Пропускаем файл models.json, сохраняем пользовательскую версию
 
             if os.path.isdir(s):
                 shutil.copytree(s, d, dirs_exist_ok=True)
             else:
                 shutil.copy2(s, d)
-        print("文件复制成功。")
+        print("Копирование файлов успешно завершено.")
 
     except Exception as e:
-        print(f"文件复制过程中发生错误: {e}")
+        print(f"Ошибка при копировании файлов: {e}")
         return
 
-    # 8. 智能合并配置
+    # 8. Интеллектуальное объединение конфигурации
     if old_config_values and os.path.exists(new_config_template_path):
-        print("\n[*] 正在智能合并配置（保留注释）...")
+        print("\n[*] Выполняется интеллектуальное объединение конфигурации (с сохранением комментариев)...")
         try:
             with open(new_config_template_path, 'r', encoding='utf-8') as f:
                 new_config_content = f.read()
@@ -163,38 +163,38 @@ def main():
 
             with open(old_config_path, 'w', encoding='utf-8') as f:
                 f.write(new_config_content)
-            print("配置合并成功。")
+            print("Объединение конфигурации успешно завершено.")
 
         except Exception as e:
-            print(f"配置合并过程中发生严重错误: {e}")
+            print(f"Критическая ошибка при объединении конфигурации: {e}")
     else:
-        print("无法进行智能合并，将直接使用新版配置文件。")
+        print("Невозможно выполнить интеллектуальное объединение, будет использован новый файл конфигурации.")
         if os.path.exists(new_config_template_path):
             shutil.copy2(new_config_template_path, old_config_path)
 
-    # 9. 清理临时文件夹
-    print("\n[*] 正在清理临时文件...")
+    # 9. Очистка временной папки
+    print("\n[*] Очистка временных файлов...")
     try:
         shutil.rmtree(update_dir)
-        print("清理完毕。")
+        print("Очистка завершена.")
     except Exception as e:
-        print(f"清理临时文件时发生错误: {e}")
+        print(f"Ошибка при очистке временных файлов: {e}")
 
-    # 10. 重启主程序
-    print("\n[*] 正在重启主程序...")
+    # 10. Перезапуск основного приложения
+    print("\n[*] Перезапуск основного приложения...")
     try:
         main_script_path = os.path.join(destination_dir, "api_server.py")
         if not os.path.exists(main_script_path):
-             print(f"错误: 找不到主程序脚本 {main_script_path}。")
-             return
+            print(f"Ошибка: основной скрипт {main_script_path} не найден.")
+            return
         
         subprocess.Popen([sys.executable, main_script_path])
-        print("主程序已在后台重新启动。")
+        print("Основное приложение перезапущено в фоновом режиме.")
     except Exception as e:
-        print(f"重启主程序失败: {e}")
-        print(f"请手动运行 {main_script_path}")
+        print(f"Не удалось перезапустить основное приложение: {e}")
+        print(f"Пожалуйста, запустите {main_script_path} вручную.")
 
-    print("--- 更新完成 ---")
+    print("--- Обновление завершено ---")
 
 if __name__ == "__main__":
     main()
