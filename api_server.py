@@ -395,7 +395,9 @@ async def lifespan(app: FastAPI):
     logger.info("  (Режим можно изменить, запустив id_updater.py)")
     logger.info("="*60)
 
-    check_for_updates()  # Проверка обновлений программы
+    # обновления отключены чтобы не было сюрпризов
+    # т.к. они идут на оригинальный репозиторий Lianues/LMArenaBridge (см функцию check_for_updates)
+    # check_for_updates()  # Проверка обновлений программы
     load_model_map()  # Повторная загрузка моделей
     load_model_endpoint_map()  # Загрузка сопоставления конечных точек моделей
     logger.info("Сервер успешно запущен. Ожидание подключения скрипта Tampermonkey...")
