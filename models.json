@@ -1,5 +1,9 @@
 {
+    "claude-opus-4-20250514-thinking-16k": "3b5e9593-3dc0-4492-a3da-19784c4bde75",
+    "gpt-5-high": "983bc566-b783-4d28-b24c-3c8b08eb1086",
+    "claude-sonnet-4-5-20250929-thinking-32k": "b0ea1407-2f92-4515-b9cc-b22a6d6c14f2",
     "gemini-2.5-pro": "e2d9d353-6dbe-4414-bf87-bd289d523726",
     "gpt-5": "983bc566-b783-4d28-b24c-3c8b08eb1086",
+    "gemini-2.5-flash-image-preview (nano-banana)": "e884e85b-c998-44d8-b38d-db42a300a318:image",
     "nano-banana": "null:image"
 }
